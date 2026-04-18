@@ -1,3 +1,4 @@
+```python
 from fastapi import FastAPI
 import requests
 import pandas as pd
@@ -60,9 +61,11 @@ def analyze_market(df, trend):
     resistance = df["high"].rolling(20).max().iloc[-2]
 
     rr1, rr2, rr3 = 1, 2, 3
+
     confidence = 0
     reason = []
 
+    # Volume
     avg_volume = df["volume"].rolling(10).mean().iloc[-2]
     current_volume = df["volume"].iloc[-2]
 
@@ -70,9 +73,11 @@ def analyze_market(df, trend):
         confidence += 20
         reason.append("Volume spike")
 
+    # Liquidity
     liquidity_above, liquidity_below = detect_liquidity(df)
 
-    if trend == "UP" and price > support:
+    # SIGNAL
+    if trend == "UP":
         signal = "BUY"
         sl = support
         risk = price - sl
@@ -85,13 +90,13 @@ def analyze_market(df, trend):
         tp3 = price + (risk * rr3)
 
         confidence += 30
-        reason.append("Uptrend + support")
+        reason.append("Uptrend setup")
 
         if liquidity_below:
             confidence += 20
             reason.append("Liquidity below")
 
-    elif trend == "DOWN" and price < resistance:
+    else:
         signal = "SELL"
         sl = resistance + 10
         risk = sl - price
@@ -104,22 +109,13 @@ def analyze_market(df, trend):
         tp3 = price - (risk * rr3)
 
         confidence += 30
-        reason.append("Downtrend + resistance")
+        reason.append("Downtrend setup")
 
         if liquidity_above:
             confidence += 20
             reason.append("Liquidity above")
 
-    else:
-        signal = "WAIT"
-        sl = price
-        entry_low = price
-        entry_high = price
-        tp1 = price
-        tp2 = price
-        tp3 = price
-        reason.append("No setup")
-
+    # STATUS
     if price < entry_low:
         status = "WAIT"
     elif entry_low <= price <= entry_high:
@@ -127,8 +123,16 @@ def analyze_market(df, trend):
     else:
         status = "MISSED"
 
+    # RR CALCULATION
+    try:
+        rr = abs(tp1 - entry_low) / abs(entry_low - sl)
+    except:
+        rr = 0
+
+    # TIME
     signal_time = datetime.datetime.now().strftime("%H:%M:%S")
 
+    # STRENGTH
     if confidence >= 70:
         strength = "STRONG"
     elif confidence >= 50:
@@ -144,6 +148,7 @@ def analyze_market(df, trend):
         "tp1": float(round(tp1,2)),
         "tp2": float(round(tp2,2)),
         "tp3": float(round(tp3,2)),
+        "rr": round(rr,2),
         "confidence": confidence,
         "trend": trend,
         "status": status,
@@ -153,7 +158,7 @@ def analyze_market(df, trend):
 
 
 # ==============================
-# API ROUTE
+# API ROUTE (UPDATED)
 # ==============================
 @app.get("/analyze")
 def analyze():
@@ -163,7 +168,20 @@ def analyze():
     trend_5m = get_trend(df_5m)
     trend_15m = get_trend(df_15m)
 
+    # NEW LOGIC (NO MORE WAIT)
     if trend_5m != trend_15m:
-        return {"signal": "WAIT", "reason": "Timeframes not aligned"}
+        final_trend = trend_5m
+        alignment = "NOT_ALIGNED"
+        penalty = 20
+    else:
+        final_trend = trend_5m
+        alignment = "ALIGNED"
+        penalty = 0
 
-    return analyze_market(df_5m, trend_5m)
+    result = analyze_market(df_5m, final_trend)
+
+    result["alignment"] = alignment
+    result["confidence"] = max(0, result["confidence"] - penalty)
+
+    return result
+```

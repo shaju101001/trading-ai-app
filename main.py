@@ -7,7 +7,7 @@ import datetime
 app = FastAPI()
 
 # ==============================
-# FETCH DATA (SAFE)
+# FETCH DATA
 # ==============================
 def get_binance_data(interval="5m"):
     try:
@@ -79,7 +79,6 @@ def analyze_market(df, trend):
         resistance = df["high"].rolling(20).max().iloc[-2]
 
         rr1, rr2, rr3 = 1, 2, 3
-
         confidence = 0
         reason = []
 
@@ -92,11 +91,13 @@ def analyze_market(df, trend):
 
         liquidity_above, liquidity_below = detect_liquidity(df)
 
-        # SIGNAL
+        # ==========================
+        # SIGNAL LOGIC
+        # ==========================
         if trend == "UP":
             signal = "BUY"
             sl = support
-            risk = max(price - sl, 1)  # prevent zero
+            risk = max(price - sl, 1)
 
             entry_low = support
             entry_high = support + (risk * 0.3)
@@ -131,7 +132,22 @@ def analyze_market(df, trend):
                 confidence += 20
                 reason.append("Liquidity above")
 
+        # ==========================
+        # SMART ENTRY FIX (KEY PART)
+        # ==========================
+        distance = abs(price - entry_high)
+
+        if distance > (risk * 1.5):
+            entry_type = "MARKET"
+            entry_low = price
+            entry_high = price
+            reason.append("Market entry (momentum move)")
+        else:
+            entry_type = "PULLBACK"
+
+        # ==========================
         # STATUS
+        # ==========================
         if price < entry_low:
             status = "WAIT"
         elif entry_low <= price <= entry_high:
@@ -139,7 +155,9 @@ def analyze_market(df, trend):
         else:
             status = "MISSED"
 
-        # RR SAFE
+        # ==========================
+        # RR
+        # ==========================
         if abs(entry_low - sl) > 0:
             rr = abs(tp1 - entry_low) / abs(entry_low - sl)
         else:
@@ -147,7 +165,6 @@ def analyze_market(df, trend):
 
         signal_time = datetime.datetime.now().strftime("%H:%M:%S")
 
-        # STRENGTH
         if confidence >= 70:
             strength = "STRONG"
         elif confidence >= 50:
@@ -157,6 +174,7 @@ def analyze_market(df, trend):
 
         return {
             "signal": signal,
+            "entry_type": entry_type,
             "strength": strength,
             "entry_zone": [float(round(entry_low,2)), float(round(entry_high,2))],
             "sl": float(round(sl,2)),
@@ -172,10 +190,7 @@ def analyze_market(df, trend):
         }
 
     except:
-        return {
-            "signal": "ERROR",
-            "reason": "Analysis failed"
-        }
+        return {"signal": "ERROR", "reason": "Analysis failed"}
 
 
 # ==============================
@@ -192,7 +207,6 @@ def analyze():
     trend_5m = get_trend(df_5m)
     trend_15m = get_trend(df_15m)
 
-    # ALWAYS GIVE SIGNAL
     if trend_5m != trend_15m:
         final_trend = trend_5m
         alignment = "NOT_ALIGNED"

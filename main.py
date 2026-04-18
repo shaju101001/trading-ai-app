@@ -28,14 +28,10 @@ def get_binance_data(interval="5m"):
             "close_time","qav","trades","tbbav","tbqav","ignore"
         ])
 
-        df["open"] = df["open"].astype(float)
-        df["high"] = df["high"].astype(float)
-        df["low"] = df["low"].astype(float)
-        df["close"] = df["close"].astype(float)
-        df["volume"] = df["volume"].astype(float)
+        for col in ["open","high","low","close","volume"]:
+            df[col] = df[col].astype(float)
 
         return df
-
     except:
         return pd.DataFrame()
 
@@ -54,22 +50,6 @@ def get_trend(df):
 
 
 # ==============================
-# LIQUIDITY
-# ==============================
-def detect_liquidity(df):
-    try:
-        highs = df["high"].tail(10).values
-        lows = df["low"].tail(10).values
-
-        liquidity_above = np.std(highs) < 10
-        liquidity_below = np.std(lows) < 10
-
-        return liquidity_above, liquidity_below
-    except:
-        return False, False
-
-
-# ==============================
 # ANALYSIS
 # ==============================
 def analyze_market(df, trend):
@@ -79,81 +59,78 @@ def analyze_market(df, trend):
         resistance = df["high"].rolling(20).max().iloc[-2]
 
         rr1, rr2, rr3 = 1, 2, 3
-        confidence = 0
+        confidence = 30  # base confidence
         reason = []
 
-        avg_volume = df["volume"].rolling(10).mean().iloc[-2]
-        current_volume = df["volume"].iloc[-2]
-
-        if current_volume > avg_volume:
-            confidence += 20
-            reason.append("Volume spike")
-
-        liquidity_above, liquidity_below = detect_liquidity(df)
-
         # ==========================
-        # SIGNAL LOGIC
+        # SIGNAL
         # ==========================
         if trend == "UP":
             signal = "BUY"
             sl = support
             risk = max(price - sl, 1)
 
-            entry_low = support
-            entry_high = support + (risk * 0.3)
+            pullback_low = support
+            pullback_high = support + (risk * 0.3)
 
             tp1 = price + (risk * rr1)
             tp2 = price + (risk * rr2)
             tp3 = price + (risk * rr3)
-
-            confidence += 30
-            reason.append("Uptrend setup")
-
-            if liquidity_below:
-                confidence += 20
-                reason.append("Liquidity below")
 
         else:
             signal = "SELL"
             sl = resistance + 10
             risk = max(sl - price, 1)
 
-            entry_low = resistance - (risk * 0.3)
-            entry_high = resistance
+            pullback_low = resistance - (risk * 0.3)
+            pullback_high = resistance
 
             tp1 = price - (risk * rr1)
             tp2 = price - (risk * rr2)
             tp3 = price - (risk * rr3)
 
-            confidence += 30
-            reason.append("Downtrend setup")
-
-            if liquidity_above:
-                confidence += 20
-                reason.append("Liquidity above")
-
         # ==========================
-        # SMART ENTRY FIX (KEY PART)
+        # SMART ENTRY SYSTEM (FINAL)
         # ==========================
-        distance = abs(price - entry_high)
+        entry_type = "PULLBACK"
+        entry_low = pullback_low
+        entry_high = pullback_high
 
-        if distance > (risk * 1.5):
+        # 🔥 1. CONTINUATION ENTRY (MOST IMPORTANT FIX)
+        if trend == "DOWN" and price < pullback_low:
+            entry_type = "CONTINUATION"
+            entry_low = price
+            entry_high = price
+            reason.append("Downtrend continuation")
+
+        elif trend == "UP" and price > pullback_high:
+            entry_type = "CONTINUATION"
+            entry_low = price
+            entry_high = price
+            reason.append("Uptrend continuation")
+
+        # 🔥 2. MARKET ENTRY (IF TOO FAR)
+        elif abs(price - pullback_high) > (risk * 1.5):
             entry_type = "MARKET"
             entry_low = price
             entry_high = price
-            reason.append("Market entry (momentum move)")
+            reason.append("Momentum entry")
+
+        # 🔥 3. PULLBACK ENTRY
         else:
-            entry_type = "PULLBACK"
+            reason.append("Pullback entry")
 
         # ==========================
         # STATUS
         # ==========================
-        if price < entry_low:
-            status = "WAIT"
-        elif entry_low <= price <= entry_high:
+        if entry_low <= price <= entry_high:
             status = "ENTER NOW"
+        elif trend == "DOWN" and price < entry_low:
+            status = "RUNNING"
+        elif trend == "UP" and price > entry_high:
+            status = "RUNNING"
         else:
-            status = "MISSED"
+            status = "WAIT"
 
         # ==========================
         # RR
@@ -165,22 +142,14 @@ def analyze_market(df, trend):
 
         signal_time = datetime.datetime.now().strftime("%H:%M:%S")
 
-        if confidence >= 70:
-            strength = "STRONG"
-        elif confidence >= 50:
-            strength = "MEDIUM"
-        else:
-            strength = "WEAK"
-
         return {
             "signal": signal,
             "entry_type": entry_type,
-            "strength": strength,
-            "entry_zone": [float(round(entry_low,2)), float(round(entry_high,2))],
-            "sl": float(round(sl,2)),
-            "tp1": float(round(tp1,2)),
-            "tp2": float(round(tp2,2)),
-            "tp3": float(round(tp3,2)),
+            "entry_zone": [round(entry_low,2), round(entry_high,2)],
+            "sl": round(sl,2),
+            "tp1": round(tp1,2),
+            "tp2": round(tp2,2),
+            "tp3": round(tp3,2),
             "rr": round(rr,2),
             "confidence": confidence,
             "trend": trend,
@@ -210,17 +179,11 @@ def analyze():
     if trend_5m != trend_15m:
         final_trend = trend_5m
         alignment = "NOT_ALIGNED"
-        penalty = 20
     else:
         final_trend = trend_5m
         alignment = "ALIGNED"
-        penalty = 0
 
     result = analyze_market(df_5m, final_trend)
-
-    if "confidence" in result:
-        result["confidence"] = max(0, result["confidence"] - penalty)
-
     result["alignment"] = alignment
 
     return result

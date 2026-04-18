@@ -1,4 +1,3 @@
-```python
 from fastapi import FastAPI
 import requests
 import pandas as pd
@@ -184,4 +183,3 @@ def analyze():
     result["confidence"] = max(0, result["confidence"] - penalty)
 
     return result
-```

@@ -167,4 +167,3 @@ def analyze():
         return {"signal": "WAIT", "reason": "Timeframes not aligned"}
 
     return analyze_market(df_5m, trend_5m)
-```

@@ -258,11 +258,14 @@ async def analyze():
 
         result = generate_signal(c15, c1h)
 
-        return {
-            "time": datetime.now().strftime("%H:%M:%S"),
-            "market": "BTCUSDT",
-            "signal": result
-        }
+        ist = pytz.timezone("Asia/Kolkata")
+current_time = datetime.now(ist)
+
+return {
+    "time": current_time.strftime("%H:%M:%S"),
+    "market": "BTCUSDT",
+    "signal": result
+}
 
     except Exception as e:
         return {"error": str(e)}

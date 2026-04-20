@@ -1,8 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
-import pandas as pd
-import numpy as np
 from datetime import datetime
 
 app = FastAPI()
@@ -33,110 +31,155 @@ async def get_binance_data(interval="5m", limit=150):
         r.raise_for_status()
         data = r.json()
 
-    df = pd.DataFrame(data, columns=[
-        "time","open","high","low","close","volume",
-        "close_time","qav","trades","tbbav","tbqav","ignore"
-    ])
+    # Extract only needed fields (LIGHTWEIGHT)
+    candles = []
+    for d in data:
+        candles.append({
+            "open": float(d[1]),
+            "high": float(d[2]),
+            "low": float(d[3]),
+            "close": float(d[4]),
+            "volume": float(d[5])
+        })
 
-    for col in ["open","high","low","close","volume"]:
-        df[col] = df[col].astype(float)
-
-    return df
+    return candles
 
 # =========================
-# INDICATORS
+# INDICATORS (PURE PYTHON)
 # =========================
-def add_indicators(df):
-    # EMA
-    df["ema20"] = df["close"].ewm(span=20).mean()
-    df["ema50"] = df["close"].ewm(span=50).mean()
 
-    # RSI
-    delta = df["close"].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss
-    df["rsi"] = 100 - (100 / (1 + rs))
+def ema(values, period):
+    k = 2 / (period + 1)
+    ema_values = [values[0]]
+    for price in values[1:]:
+        ema_values.append(price * k + ema_values[-1] * (1 - k))
+    return ema_values
 
-    # ATR
-    df["tr"] = np.maximum(df["high"] - df["low"],
-                           np.maximum(abs(df["high"] - df["close"].shift()),
-                                      abs(df["low"] - df["close"].shift())))
-    df["atr"] = df["tr"].rolling(14).mean()
 
-    return df
+def rsi(values, period=14):
+    gains, losses = [], []
+
+    for i in range(1, len(values)):
+        diff = values[i] - values[i - 1]
+        gains.append(max(diff, 0))
+        losses.append(abs(min(diff, 0)))
+
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
+    rsis = [50] * (period)
+
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+
+        if avg_loss == 0:
+            rs = 0
+        else:
+            rs = avg_gain / avg_loss
+
+        rsis.append(100 - (100 / (1 + rs)))
+
+    return rsis
+
+
+def atr(candles, period=14):
+    trs = []
+    for i in range(1, len(candles)):
+        high = candles[i]["high"]
+        low = candles[i]["low"]
+        prev_close = candles[i - 1]["close"]
+
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close)
+        )
+        trs.append(tr)
+
+    atr_values = []
+    for i in range(period, len(trs)):
+        atr_values.append(sum(trs[i - period:i]) / period)
+
+    return atr_values
 
 # =========================
 # SUPPORT / RESISTANCE
 # =========================
-def get_levels(df):
-    recent = df.tail(50)
-    support = recent["low"].min()
-    resistance = recent["high"].max()
+
+def get_levels(candles):
+    recent = candles[-50:]
+    support = min(c["low"] for c in recent)
+    resistance = max(c["high"] for c in recent)
     return support, resistance
 
 # =========================
-# AI-LIKE ANALYSIS ENGINE
+# AI SIGNAL ENGINE
 # =========================
-def generate_signal(df_15m, df_1h):
-    price = df_15m["close"].iloc[-1]
 
-    # Trend
-    trend_1h = "UP" if df_1h["ema20"].iloc[-1] > df_1h["ema50"].iloc[-1] else "DOWN"
-    trend_15m = "UP" if df_15m["ema20"].iloc[-1] > df_15m["ema50"].iloc[-1] else "DOWN"
+def generate_signal(c15, c1h):
+    closes_15 = [c["close"] for c in c15]
+    closes_1h = [c["close"] for c in c1h]
 
-    # Momentum
-    rsi = df_15m["rsi"].iloc[-1]
+    price = closes_15[-1]
 
-    # Volatility
-    atr = df_15m["atr"].iloc[-1]
+    # EMA
+    ema20_15 = ema(closes_15, 20)[-1]
+    ema50_15 = ema(closes_15, 50)[-1]
+
+    ema20_1h = ema(closes_1h, 20)[-1]
+    ema50_1h = ema(closes_1h, 50)[-1]
+
+    # RSI
+    rsi_val = rsi(closes_15)[-1]
+
+    # ATR
+    atr_val = atr(c15)[-1]
 
     # Levels
-    support, resistance = get_levels(df_15m)
+    support, resistance = get_levels(c15)
 
-    # =========================
-    # DECISION ENGINE
-    # =========================
+    # Trend
+    trend_15 = "UP" if ema20_15 > ema50_15 else "DOWN"
+    trend_1h = "UP" if ema20_1h > ema50_1h else "DOWN"
 
     action = "WAIT"
     reason = []
 
-    if trend_1h == "UP" and trend_15m == "UP" and rsi > 55:
+    if trend_1h == "UP" and trend_15 == "UP" and rsi_val > 55:
         action = "BUY"
-        reason.append("Multi-timeframe uptrend")
-        reason.append("RSI bullish")
+        reason.append("Uptrend + RSI strong")
 
-    elif trend_1h == "DOWN" and trend_15m == "DOWN" and rsi < 45:
+    elif trend_1h == "DOWN" and trend_15 == "DOWN" and rsi_val < 45:
         action = "SELL"
-        reason.append("Multi-timeframe downtrend")
-        reason.append("RSI bearish")
+        reason.append("Downtrend + RSI weak")
 
     else:
-        reason.append("No strong confirmation")
+        reason.append("No confirmation")
 
-    # Targets using ATR
+    # Targets
     if action == "BUY":
         entry = price
-        target = price + (2 * atr)
-        sl = price - atr
+        target = price + (2 * atr_val)
+        sl = price - atr_val
 
     elif action == "SELL":
         entry = price
-        target = price - (2 * atr)
-        sl = price + atr
+        target = price - (2 * atr_val)
+        sl = price + atr_val
 
     else:
         entry = price
         target = price
         sl = price
 
-    # Confidence Score (simple AI feel)
+    # Confidence
     confidence = 0
-    if trend_1h == trend_15m:
+    if trend_1h == trend_15:
         confidence += 40
-    if (rsi > 55 and action == "BUY") or (rsi < 45 and action == "SELL"):
+    if (rsi_val > 55 and action == "BUY") or (rsi_val < 45 and action == "SELL"):
         confidence += 30
-    if abs(price - support) > atr and abs(price - resistance) > atr:
+    if abs(price - support) > atr_val and abs(price - resistance) > atr_val:
         confidence += 30
 
     return {
@@ -146,8 +189,8 @@ def generate_signal(df_15m, df_1h):
         "stoploss": round(sl, 2),
         "confidence": f"{confidence}%",
         "trend_1h": trend_1h,
-        "trend_15m": trend_15m,
-        "rsi": round(rsi, 2),
+        "trend_15m": trend_15,
+        "rsi": round(rsi_val, 2),
         "support": round(support, 2),
         "resistance": round(resistance, 2),
         "reason": reason
@@ -156,21 +199,23 @@ def generate_signal(df_15m, df_1h):
 # =========================
 # API ROUTE
 # =========================
+
+@app.get("/")
+def home():
+    return {"status": "API running"}
+
 @app.get("/analyze")
 async def analyze():
     try:
-        df_15m = await get_binance_data("15m")
-        df_1h = await get_binance_data("1h")
+        c15 = await get_binance_data("15m")
+        c1h = await get_binance_data("1h")
 
-        df_15m = add_indicators(df_15m)
-        df_1h = add_indicators(df_1h)
-
-        result = generate_signal(df_15m, df_1h)
+        signal = generate_signal(c15, c1h)
 
         return {
             "time": datetime.now().strftime("%H:%M:%S"),
-            "market_status": "LIVE",
-            "signal": result
+            "market": "BTCUSDT",
+            "signal": signal
         }
 
     except Exception as e:

@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from datetime import datetime
+import pytz
 
 app = FastAPI()
 
@@ -75,92 +76,63 @@ def rsi(values, period=14):
 
     return rsis
 
-def atr(candles, period=14):
-    trs = []
-    for i in range(1, len(candles)):
-        high = candles[i]["high"]
-        low = candles[i]["low"]
-        prev_close = candles[i - 1]["close"]
-
-        tr = max(
-            high - low,
-            abs(high - prev_close),
-            abs(low - prev_close)
-        )
-        trs.append(tr)
-
-    atr_values = []
-    for i in range(period, len(trs)):
-        atr_values.append(sum(trs[i - period:i]) / period)
-
-    return atr_values
-
 # =========================
-# SUPPORT / RESISTANCE
+# FIBONACCI LEVELS
 # =========================
-def get_levels(candles):
+def get_fib_levels(candles):
     recent = candles[-50:]
-    support = min(c["low"] for c in recent)
-    resistance = max(c["high"] for c in recent)
-    return support, resistance
 
-# =========================
-# KEY ZONE (WITH LEVELS)
-# =========================
-def get_key_zone(price, support, resistance, atr_val):
-    res_level = round(resistance / 100) * 100
-    sup_level = round(support / 100) * 100
+    high = max(c["high"] for c in recent)
+    low = min(c["low"] for c in recent)
 
-    zone_range = int(atr_val)
+    diff = high - low
 
-    if abs(price - resistance) <= atr_val:
-        return f"Sell zone: {res_level - zone_range} - {res_level}"
+    fib_50 = high - (0.5 * diff)
+    fib_618 = high - (0.618 * diff)
 
-    elif abs(price - support) <= atr_val:
-        return f"Buy zone: {sup_level} - {sup_level + zone_range}"
-
-    elif support < price < resistance:
-        return f"Mid range: {sup_level} - {res_level}"
-
-    elif price > resistance:
-        return f"Breakout above {res_level}"
-
-    else:
-        return f"Breakdown below {sup_level}"
+    return {
+        "high": high,
+        "low": low,
+        "fib_50": fib_50,
+        "fib_618": fib_618
+    }
 
 # =========================
 # MARKET EXPLANATION
 # =========================
-def explain_market(trend_1h, trend_15m, rsi_val, support, resistance, key_zone):
-    res_level = round(resistance / 100) * 100
-    sup_level = round(support / 100) * 100
+def explain_market(trend_1h, trend_15m, rsi_val, fib):
+    fib_50 = fib["fib_50"]
+    fib_618 = fib["fib_618"]
+
+    zone_low = int(fib_618)
+    zone_high = int(fib_50)
 
     if trend_1h == "DOWN" and trend_15m == "UP":
         phase = "Bearish Pullback"
         dominance = "Sellers"
         move = "Short-term bullish retracement"
-        next_move = f"Rejection near {res_level}"
+        next_move = f"Rejection likely in Fib zone {zone_low} - {zone_high}"
         trap = "Buyers may get trapped"
 
     elif trend_1h == "UP" and trend_15m == "DOWN":
         phase = "Bullish Pullback"
         dominance = "Buyers"
         move = "Short-term bearish retracement"
-        next_move = f"Bounce from {sup_level}"
+        next_move = f"Bounce likely in Fib zone {zone_low} - {zone_high}"
         trap = "Sellers may get trapped"
 
     elif trend_1h == "UP" and trend_15m == "UP":
         phase = "Strong Uptrend"
         dominance = "Buyers"
         move = "Trend continuation"
-        next_move = f"Break above {res_level}"
+        next_move = f"Break above {int(fib['high'])}"
         trap = "Late sellers risk"
 
     else:
         phase = "Strong Downtrend"
         dominance = "Sellers"
         move = "Trend continuation"
-        next_move = f"Break below {sup_level}"
+        next_move = f"Break below {int(fib['low'])}"
         trap = "Late buyers risk"
 
     # RSI classification
@@ -181,9 +153,9 @@ def explain_market(trend_1h, trend_15m, rsi_val, support, resistance, key_zone):
         "current_move": move,
         "momentum": momentum,
         "next_probability": next_move,
-        "key_zone": key_zone,
-        "key_resistance": round(resistance, 2),
-        "key_support": round(support, 2),
+        "key_zone": f"Fib zone: {zone_low} - {zone_high}",
+        "fib_50": round(fib_50, 2),
+        "fib_618": round(fib_618, 2),
         "trap_warning": trap
     }
 
@@ -202,41 +174,16 @@ def generate_signal(c15, c1h):
     ema50_1h = ema(closes_1h, 50)[-1]
 
     rsi_val = rsi(closes_15)[-1]
-    atr_val = atr(c15)[-1]
 
-    support, resistance = get_levels(c15)
-    key_zone = get_key_zone(price, support, resistance, atr_val)
+    fib = get_fib_levels(c15)
 
     trend_15 = "UP" if ema20_15 > ema50_15 else "DOWN"
     trend_1h = "UP" if ema20_1h > ema50_1h else "DOWN"
 
-    action = "WAIT"
-
-    if trend_1h == "UP" and trend_15 == "UP" and rsi_val > 55:
-        action = "BUY"
-    elif trend_1h == "DOWN" and trend_15 == "DOWN" and rsi_val < 45:
-        action = "SELL"
-
-    # Targets
-    if action == "BUY":
-        target = price + (2 * atr_val)
-        sl = price - atr_val
-    elif action == "SELL":
-        target = price - (2 * atr_val)
-        sl = price + atr_val
-    else:
-        target = price
-        sl = price
-
-    explanation = explain_market(
-        trend_1h, trend_15, rsi_val, support, resistance, key_zone
-    )
+    explanation = explain_market(trend_1h, trend_15, rsi_val, fib)
 
     return {
-        "action": action,
-        "entry": round(price, 2),
-        "target": round(target, 2),
-        "stoploss": round(sl, 2),
+        "price": round(price, 2),
         "trend_1h": trend_1h,
         "trend_15m": trend_15,
         "rsi": round(rsi_val, 2),
@@ -259,13 +206,13 @@ async def analyze():
         result = generate_signal(c15, c1h)
 
         ist = pytz.timezone("Asia/Kolkata")
-current_time = datetime.now(ist)
+        current_time = datetime.now(ist)
 
-return {
-    "time": current_time.strftime("%H:%M:%S"),
-    "market": "BTCUSDT",
-    "signal": result
-}
+        return {
+            "time": current_time.strftime("%d-%m-%Y %H:%M:%S IST"),
+            "market": "BTCUSDT",
+            "data": result
+        }
 
     except Exception as e:
         return {"error": str(e)}

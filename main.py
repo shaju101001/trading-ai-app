@@ -243,6 +243,19 @@ def build_decision(c15, c1h):
         plan = "Follow trend"
         entry = "Trade with trend"
 
+    # =========================
+# TARGET LOGIC (FIXED)
+# =========================
+
+if "BUY" in entry:
+    target = int(high_level * 1.002)   # small upside buffer
+
+elif "SELL" in entry:
+    target = int(low_level * 0.998)    # small downside buffer
+
+else:
+    target = 0
+
     return {
         "price": round(price, 2),
         "phase": phase,
@@ -256,7 +269,7 @@ def build_decision(c15, c1h):
         "scenario": scenario,
         "plan": plan,
         "entry": entry,
-        "target": low_level,
+        "target": target,
         "invalidation": high_level,
         "trend_1h": trend1h,
         "trend_15m": trend15

@@ -268,13 +268,14 @@ def build_decision(c15, c1h):
 @app.get("/analyze")
 async def analyze(symbol: str = Query("BTCUSDT")):
     try:
+
         if symbol == "BTCUSDT":
             c15 = await get_binance_data("15m")
             c1h = await get_binance_data("1h")
 
         elif symbol == "XAUUSD":
-    c15 = await get_xauusd_data("15min")
-    c1h = await get_xauusd_data("1h")
+            c15 = await get_xauusd_data("15min")
+            c1h = await get_xauusd_data("1h")
 
         else:
             return {"error": "Unsupported symbol"}

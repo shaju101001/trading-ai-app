@@ -27,16 +27,12 @@ async def get_binance_data(interval="15m", limit=150):
         r.raise_for_status()
         data = r.json()
 
-    candles = []
-    for d in data:
-        candles.append({
-            "open": float(d[1]),
-            "high": float(d[2]),
-            "low": float(d[3]),
-            "close": float(d[4]),
-        })
-
-    return candles
+    return [{
+        "open": float(d[1]),
+        "high": float(d[2]),
+        "low": float(d[3]),
+        "close": float(d[4]),
+    } for d in data]
 
 # =========================
 # INDICATORS
@@ -66,7 +62,7 @@ def rsi(values, period=14):
     return 100 - (100/(1+rs))
 
 # =========================
-# FIBONACCI
+# FIB LEVELS
 # =========================
 def get_fib(candles):
     high = max(c["high"] for c in candles[-50:])
@@ -81,7 +77,7 @@ def get_fib(candles):
     }
 
 # =========================
-# DECISION ENGINE
+# ADAPTIVE DECISION ENGINE
 # =========================
 def build_decision(c15, c1h):
     closes15 = [c["close"] for c in c15]
@@ -96,63 +92,117 @@ def build_decision(c15, c1h):
     # Momentum
     rsi_val = rsi(closes15)
 
-    # Fib
+    # Fib zone
     fib = get_fib(c15)
     zone_low = int(fib["fib618"])
     zone_high = int(fib["fib50"])
 
     # =========================
-    # LOGIC
+    # POSITION CHECK
     # =========================
+    if price < zone_low:
+        position = "Below zone"
+    elif zone_low <= price <= zone_high:
+        position = "Inside zone"
+    else:
+        position = "Above zone"
+
+    # =========================
+    # CORE LOGIC
+    # =========================
+    phase = ""
+    bias = ""
+    plan = ""
+    entry = ""
+    target = ""
+    invalid = ""
+    scenario = ""
+
+    # ===== BEARISH PULLBACK CASE =====
     if trend1h == "DOWN" and trend15 == "UP":
         phase = "Bearish Pullback"
         bias = "Bearish"
-        plan = "Wait for rejection in sell zone"
-        entry = "Enter SELL after bearish candle confirmation"
+
+        if position == "Below zone":
+            plan = "Price moving toward sell zone"
+            entry = "Wait"
+
+        elif position == "Inside zone":
+            plan = "Watch for rejection"
+            entry = "Sell after bearish candle"
+
+        else:
+            # 🔥 NEW ADAPTIVE LOGIC
+            if rsi_val > 60:
+                scenario = "Possible bullish breakout"
+                plan = "Reversal possible"
+                entry = "Wait for pullback buy setup"
+            else:
+                scenario = "Weak breakout"
+                plan = "Wait for re-entry into zone"
+                entry = "Sell on retest"
+
         target = int(fib["low"])
         invalid = int(fib["high"])
 
+    # ===== BULLISH PULLBACK =====
     elif trend1h == "UP" and trend15 == "DOWN":
         phase = "Bullish Pullback"
         bias = "Bullish"
-        plan = "Wait for bounce in buy zone"
-        entry = "Enter BUY after bullish candle confirmation"
+
+        if position == "Below zone":
+            scenario = "Breakdown risk"
+            plan = "Wait for recovery"
+            entry = "No trade"
+
+        elif position == "Inside zone":
+            plan = "Watch for bounce"
+            entry = "Buy after bullish candle"
+
+        else:
+            scenario = "Strong breakout"
+            plan = "Trend continuation"
+            entry = "Buy pullbacks"
+
         target = int(fib["high"])
         invalid = int(fib["low"])
 
-    elif trend1h == "UP":
-        phase = "Strong Uptrend"
-        bias = "Bullish"
-        plan = "Buy pullbacks"
-        entry = "Buy on small dips"
-        target = int(fib["high"])
-        invalid = int(fib["low"])
-
+    # ===== STRONG TREND =====
     else:
-        phase = "Strong Downtrend"
-        bias = "Bearish"
-        plan = "Sell pullbacks"
-        entry = "Sell on small bounces"
-        target = int(fib["low"])
-        invalid = int(fib["high"])
+        if trend1h == "UP":
+            phase = "Strong Uptrend"
+            bias = "Bullish"
+            plan = "Buy dips"
+            entry = "Buy on pullback"
+            target = int(fib["high"])
+            invalid = int(fib["low"])
+        else:
+            phase = "Strong Downtrend"
+            bias = "Bearish"
+            plan = "Sell rallies"
+            entry = "Sell on bounce"
+            target = int(fib["low"])
+            invalid = int(fib["high"])
 
     # Momentum label
-    if rsi_val > 60:
+    if rsi_val > 65:
         momentum = "Strong bullish"
-    elif rsi_val < 40:
+    elif rsi_val < 35:
         momentum = "Strong bearish"
     else:
         momentum = "Neutral"
 
     return {
         "price": round(price, 2),
-        "market_phase": phase,
+        "phase": phase,
         "bias": bias,
         "momentum": momentum,
         "zone": f"{zone_low} - {zone_high}",
+        "position": position,
+        "scenario": scenario,
         "plan": plan,
-        "entry_hint": entry,
-        "target_area": target,
+        "entry": entry,
+        "target": target,
         "invalidation": invalid,
         "trend_1h": trend1h,
         "trend_15m": trend15
@@ -167,7 +217,7 @@ async def analyze():
         c15 = await get_binance_data("15m")
         c1h = await get_binance_data("1h")
 
-        result = build_decision(c15, c1h)
+        decision = build_decision(c15, c1h)
 
         ist = pytz.timezone("Asia/Kolkata")
         now = datetime.now(ist)
@@ -175,7 +225,7 @@ async def analyze():
         return {
             "time": now.strftime("%d-%m-%Y %H:%M:%S IST"),
             "market": "BTCUSDT",
-            "decision": result
+            "decision": decision
         }
 
     except Exception as e:

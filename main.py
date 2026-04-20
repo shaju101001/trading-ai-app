@@ -35,7 +35,7 @@ async def get_binance_data(interval="15m", limit=150):
     } for d in data]
 
 # =========================
-# INDICATORS
+# EMA
 # =========================
 def ema(values, period):
     k = 2 / (period + 1)
@@ -44,6 +44,9 @@ def ema(values, period):
         ema_val = price * k + ema_val * (1 - k)
     return ema_val
 
+# =========================
+# RSI
+# =========================
 def rsi(values, period=14):
     gains, losses = [], []
     for i in range(1, len(values)):
@@ -62,7 +65,7 @@ def rsi(values, period=14):
     return 100 - (100/(1+rs))
 
 # =========================
-# FIB LEVELS
+# FIB
 # =========================
 def get_fib(candles):
     high = max(c["high"] for c in candles[-50:])
@@ -77,7 +80,32 @@ def get_fib(candles):
     }
 
 # =========================
-# ADAPTIVE DECISION ENGINE
+# PRICE ACTION DETECTION
+# =========================
+def detect_price_action(candles):
+    last = candles[-1]
+    prev = candles[-2]
+
+    # Bearish engulfing
+    if prev["close"] > prev["open"] and last["close"] < last["open"] and last["open"] > prev["close"]:
+        return "Bearish Engulfing"
+
+    # Bullish engulfing
+    if prev["close"] < prev["open"] and last["close"] > last["open"] and last["open"] < prev["close"]:
+        return "Bullish Engulfing"
+
+    # Rejection wick (upper)
+    if last["high"] - max(last["open"], last["close"]) > (last["close"] - last["open"]) * 2:
+        return "Upper Rejection Wick"
+
+    # Rejection wick (lower)
+    if min(last["open"], last["close"]) - last["low"] > (last["close"] - last["open"]) * 2:
+        return "Lower Rejection Wick"
+
+    return "No strong pattern"
+
+# =========================
+# DECISION ENGINE
 # =========================
 def build_decision(c15, c1h):
     closes15 = [c["close"] for c in c15]
@@ -85,21 +113,16 @@ def build_decision(c15, c1h):
 
     price = closes15[-1]
 
-    # Trend
     trend15 = "UP" if ema(closes15, 20) > ema(closes15, 50) else "DOWN"
     trend1h = "UP" if ema(closes1h, 20) > ema(closes1h, 50) else "DOWN"
 
-    # Momentum
     rsi_val = rsi(closes15)
-
-    # Fib zone
     fib = get_fib(c15)
+
     zone_low = int(fib["fib618"])
     zone_high = int(fib["fib50"])
 
-    # =========================
-    # POSITION CHECK
-    # =========================
+    # Position
     if price < zone_low:
         position = "Below zone"
     elif zone_low <= price <= zone_high:
@@ -107,84 +130,59 @@ def build_decision(c15, c1h):
     else:
         position = "Above zone"
 
-    # =========================
-    # CORE LOGIC
-    # =========================
-    phase = ""
-    bias = ""
+    # Price action
+    pattern = detect_price_action(c15)
+
+    scenario = ""
     plan = ""
     entry = ""
-    target = ""
-    invalid = ""
-    scenario = ""
 
-    # ===== BEARISH PULLBACK CASE =====
+    # =========================
+    # ADAPTIVE LOGIC
+    # =========================
+
     if trend1h == "DOWN" and trend15 == "UP":
         phase = "Bearish Pullback"
         bias = "Bearish"
 
-        if position == "Below zone":
-            plan = "Price moving toward sell zone"
-            entry = "Wait"
+        if position == "Inside zone":
+            if pattern in ["Bearish Engulfing", "Upper Rejection Wick"]:
+                scenario = "Confirmed rejection"
+                plan = "Sell confirmed"
+                entry = "Enter SELL"
+            else:
+                scenario = "Waiting confirmation"
+                plan = "Watch for rejection"
+                entry = "No trade"
 
-        elif position == "Inside zone":
-            plan = "Watch for rejection"
-            entry = "Sell after bearish candle"
+        elif position == "Above zone":
+            if price > fib["high"]:
+                scenario = "Confirmed breakout"
+                plan = "Trend shift possible"
+                entry = "Buy pullback"
+            else:
+                scenario = "Liquidity sweep"
+                plan = "Watch for rejection back into zone"
+                entry = "Sell if price drops below zone"
 
         else:
-            # 🔥 NEW ADAPTIVE LOGIC
-            if rsi_val > 60:
-                scenario = "Possible bullish breakout"
-                plan = "Reversal possible"
-                entry = "Wait for pullback buy setup"
-            else:
-                scenario = "Weak breakout"
-                plan = "Wait for re-entry into zone"
-                entry = "Sell on retest"
+            scenario = "Approaching zone"
+            plan = "Wait"
+            entry = "No trade"
 
         target = int(fib["low"])
         invalid = int(fib["high"])
 
-    # ===== BULLISH PULLBACK =====
-    elif trend1h == "UP" and trend15 == "DOWN":
-        phase = "Bullish Pullback"
-        bias = "Bullish"
-
-        if position == "Below zone":
-            scenario = "Breakdown risk"
-            plan = "Wait for recovery"
-            entry = "No trade"
-
-        elif position == "Inside zone":
-            plan = "Watch for bounce"
-            entry = "Buy after bullish candle"
-
-        else:
-            scenario = "Strong breakout"
-            plan = "Trend continuation"
-            entry = "Buy pullbacks"
-
-        target = int(fib["high"])
-        invalid = int(fib["low"])
-
-    # ===== STRONG TREND =====
     else:
-        if trend1h == "UP":
-            phase = "Strong Uptrend"
-            bias = "Bullish"
-            plan = "Buy dips"
-            entry = "Buy on pullback"
-            target = int(fib["high"])
-            invalid = int(fib["low"])
-        else:
-            phase = "Strong Downtrend"
-            bias = "Bearish"
-            plan = "Sell rallies"
-            entry = "Sell on bounce"
-            target = int(fib["low"])
-            invalid = int(fib["high"])
+        phase = "Trend Continuation"
+        bias = "Bullish" if trend1h == "UP" else "Bearish"
+        scenario = "Trending"
+        plan = "Trade with trend"
+        entry = "Follow trend"
+        target = int(fib["high"] if bias == "Bullish" else fib["low"])
+        invalid = int(fib["low"] if bias == "Bullish" else fib["high"])
 
-    # Momentum label
+    # Momentum
     if rsi_val > 65:
         momentum = "Strong bullish"
     elif rsi_val < 35:
@@ -199,6 +197,7 @@ def build_decision(c15, c1h):
         "momentum": momentum,
         "zone": f"{zone_low} - {zone_high}",
         "position": position,
+        "pattern": pattern,
         "scenario": scenario,
         "plan": plan,
         "entry": entry,

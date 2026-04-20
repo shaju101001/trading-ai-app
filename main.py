@@ -61,95 +61,94 @@ def analyze_market():
     df_15m = get_data("15m")
 
     if df_1h.empty or df_15m.empty:
-        return {"error": "Data fetch failed"}
+        return {"status": "ERROR", "message": "Data fetch failed"}
 
     trend_1h = get_trend(df_1h)
     trend_15m = get_trend(df_15m)
 
     price = df_15m["close"].iloc[-2]
 
-    # Swing levels
     high_15m, low_15m = get_levels(df_15m)
 
     # ==========================
-    # PHASE DETECTION
+    # DETERMINE PHASE
     # ==========================
     if trend_1h == trend_15m:
         phase = "IMPULSE"
     else:
         phase = "PULLBACK"
 
-    # ==========================
-    # LOGIC
-    # ==========================
-
     result = {}
 
     # ==========================
-    # CASE 1: IMPULSE
+    # IMPULSE (STRONG TREND)
     # ==========================
     if phase == "IMPULSE":
 
         if trend_1h == "UP":
-            result["market_trend"] = "UP"
-            result["current_phase"] = "IMPULSE"
-            result["action_now"] = "BUY NOW"
+            result["market_status"] = "UPTREND"
+            result["current_move"] = "STRONG UP MOVE"
+            result["what_to_do"] = "BUY NOW"
+
             result["entry"] = round(price, 2)
-            result["primary_target"] = round(high_15m, 2)
-            result["sl"] = round(low_15m, 2)
-            result["reason"] = "Strong uptrend continuation"
+            result["target"] = round(high_15m, 2)
+            result["stop_loss"] = round(low_15m, 2)
+
+            result["message"] = "Market strong up. Buyers in control."
 
         else:
-            result["market_trend"] = "DOWN"
-            result["current_phase"] = "IMPULSE"
-            result["action_now"] = "SELL NOW"
+            result["market_status"] = "DOWNTREND"
+            result["current_move"] = "STRONG DOWN MOVE"
+            result["what_to_do"] = "SELL NOW"
+
             result["entry"] = round(price, 2)
-            result["primary_target"] = round(low_15m, 2)
-            result["sl"] = round(high_15m, 2)
-            result["reason"] = "Strong downtrend continuation"
+            result["target"] = round(low_15m, 2)
+            result["stop_loss"] = round(high_15m, 2)
+
+            result["message"] = "Market strong down. Sellers in control."
 
     # ==========================
-    # CASE 2: PULLBACK (IMPORTANT)
+    # PULLBACK (MOST IMPORTANT)
     # ==========================
     else:
 
         if trend_1h == "DOWN":
 
-            result["market_trend"] = "DOWN"
-            result["current_phase"] = "PULLBACK"
-            result["action_now"] = "SELL BIAS"
-            result["entry"] = round(price, 2)
+            result["market_status"] = "DOWNTREND"
+            result["current_move"] = "PULLBACK UP"
 
-            result["pullback_zone"] = [
+            result["what_to_do"] = "LOOK FOR SELL"
+
+            result["sell_zone"] = [
                 round(high_15m * 0.98, 2),
                 round(high_15m, 2)
             ]
 
-            result["primary_target"] = round(low_15m, 2)
+            result["current_price"] = round(price, 2)
+            result["target"] = round(low_15m, 2)
 
-            result["if_rejection"] = "SELL CONTINUE"
-            result["if_break"] = "TREND REVERSAL → BUY"
+            result["invalid_if_above"] = round(high_15m, 2)
 
-            result["reason"] = "Downtrend + pullback (look for sell)"
+            result["message"] = "Price is bouncing up in downtrend. Look for sell near top."
 
         else:
 
-            result["market_trend"] = "UP"
-            result["current_phase"] = "PULLBACK"
-            result["action_now"] = "BUY BIAS"
-            result["entry"] = round(price, 2)
+            result["market_status"] = "UPTREND"
+            result["current_move"] = "PULLBACK DOWN"
 
-            result["pullback_zone"] = [
+            result["what_to_do"] = "LOOK FOR BUY"
+
+            result["buy_zone"] = [
                 round(low_15m, 2),
                 round(low_15m * 1.02, 2)
             ]
 
-            result["primary_target"] = round(high_15m, 2)
+            result["current_price"] = round(price, 2)
+            result["target"] = round(high_15m, 2)
 
-            result["if_rejection"] = "BUY CONTINUE"
-            result["if_break"] = "TREND REVERSAL → SELL"
+            result["invalid_if_below"] = round(low_15m, 2)
 
-            result["reason"] = "Uptrend + dip (look for buy)"
+            result["message"] = "Price dipping in uptrend. Look for buy near bottom."
 
     # ==========================
     # EXTRA INFO
@@ -159,7 +158,6 @@ def analyze_market():
     result["time"] = datetime.datetime.now().strftime("%H:%M:%S")
 
     return result
-
 
 # ==============================
 # API

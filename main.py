@@ -1,167 +1,93 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 import requests
 import pandas as pd
 import numpy as np
-import datetime
+from datetime import datetime
 
 app = FastAPI()
 
-# ==============================
-# FETCH DATA
-# ==============================
-def get_data(interval):
-    try:
-        url = "https://api.binance.com/api/v3/klines"
-        params = {"symbol": "BTCUSDT", "interval": interval, "limit": 100}
-        res = requests.get(url, params=params, timeout=10)
+# ✅ CORS FIX (VERY IMPORTANT)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # allow all domains
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-        if res.status_code != 200:
-            return pd.DataFrame()
+# 🔥 GET DATA FROM BINANCE
+def get_binance_data(interval="5m", limit=100):
+    url = "https://api.binance.com/api/v3/klines"
+    params = {
+        "symbol": "BTCUSDT",
+        "interval": interval,
+        "limit": limit
+    }
+    data = requests.get(url, params=params).json()
 
-        data = res.json()
+    df = pd.DataFrame(data, columns=[
+        "time","open","high","low","close","volume",
+        "close_time","qav","trades","tbbav","tbqav","ignore"
+    ])
 
-        df = pd.DataFrame(data, columns=[
-            "time","open","high","low","close","volume",
-            "close_time","qav","trades","tbbav","tbqav","ignore"
-        ])
+    df["close"] = df["close"].astype(float)
+    return df
 
-        for col in ["open","high","low","close","volume"]:
-            df[col] = df[col].astype(float)
-
-        return df
-    except:
-        return pd.DataFrame()
-
-# ==============================
-# TREND DETECTION
-# ==============================
-def get_trend(df):
-    try:
-        if df["close"].iloc[-2] > df["close"].iloc[-10]:
-            return "UP"
-        else:
-            return "DOWN"
-    except:
-        return "SIDEWAYS"
-
-# ==============================
-# SWING LEVELS
-# ==============================
-def get_levels(df):
-    high = df["high"].tail(20).max()
-    low = df["low"].tail(20).min()
-    return high, low
-
-# ==============================
-# ANALYSIS
-# ==============================
+# 🔥 ANALYSIS LOGIC
 def analyze_market():
+    df_15m = get_binance_data("15m")
+    df_1h = get_binance_data("1h")
 
-    df_1h = get_data("1h")
-    df_15m = get_data("15m")
+    current_price = df_15m["close"].iloc[-1]
 
-    if df_1h.empty or df_15m.empty:
-        return {"status": "ERROR", "message": "Data fetch failed"}
+    # EMA
+    df_15m["ema20"] = df_15m["close"].ewm(span=20).mean()
+    df_1h["ema20"] = df_1h["close"].ewm(span=20).mean()
 
-    trend_1h = get_trend(df_1h)
-    trend_15m = get_trend(df_15m)
+    # TREND
+    trend_15m = "UP" if df_15m["close"].iloc[-1] > df_15m["ema20"].iloc[-1] else "DOWN"
+    trend_1h = "UP" if df_1h["close"].iloc[-1] > df_1h["ema20"].iloc[-1] else "DOWN"
 
-    price = df_15m["close"].iloc[-2]
+    # 🔥 LOGIC (NO WAIT — ALWAYS ACTION)
+    if trend_1h == "DOWN":
+        action = "SELL NOW"
+        entry = current_price
+        target = current_price - 300
+        sl = current_price + 150
+        reason = "Strong downtrend, selling pressure"
+        market_trend = "DOWN"
 
-    high_15m, low_15m = get_levels(df_15m)
+    elif trend_1h == "UP":
+        action = "BUY NOW"
+        entry = current_price
+        target = current_price + 300
+        sl = current_price - 150
+        reason = "Strong uptrend, buying pressure"
+        market_trend = "UP"
 
-    # ==========================
-    # DETERMINE PHASE
-    # ==========================
-    if trend_1h == trend_15m:
-        phase = "IMPULSE"
     else:
-        phase = "PULLBACK"
+        action = "WAIT"
+        entry = current_price
+        target = current_price
+        sl = current_price
+        reason = "No clear trend"
+        market_trend = "SIDEWAYS"
 
-    result = {}
+    return {
+        "market_trend": market_trend,
+        "current_phase": "LIVE MARKET",
+        "action_now": action,
+        "entry": round(entry, 2),
+        "primary_target": round(target, 2),
+        "sl": round(sl, 2),
+        "reason": reason,
+        "trend_1h": trend_1h,
+        "trend_15m": trend_15m,
+        "time": datetime.now().strftime("%H:%M:%S")
+    }
 
-    # ==========================
-    # IMPULSE (STRONG TREND)
-    # ==========================
-    if phase == "IMPULSE":
-
-        if trend_1h == "UP":
-            result["market_status"] = "UPTREND"
-            result["current_move"] = "STRONG UP MOVE"
-            result["what_to_do"] = "BUY NOW"
-
-            result["entry"] = round(price, 2)
-            result["target"] = round(high_15m, 2)
-            result["stop_loss"] = round(low_15m, 2)
-
-            result["message"] = "Market strong up. Buyers in control."
-
-        else:
-            result["market_status"] = "DOWNTREND"
-            result["current_move"] = "STRONG DOWN MOVE"
-            result["what_to_do"] = "SELL NOW"
-
-            result["entry"] = round(price, 2)
-            result["target"] = round(low_15m, 2)
-            result["stop_loss"] = round(high_15m, 2)
-
-            result["message"] = "Market strong down. Sellers in control."
-
-    # ==========================
-    # PULLBACK (MOST IMPORTANT)
-    # ==========================
-    else:
-
-        if trend_1h == "DOWN":
-
-            result["market_status"] = "DOWNTREND"
-            result["current_move"] = "PULLBACK UP"
-
-            result["what_to_do"] = "LOOK FOR SELL"
-
-            result["sell_zone"] = [
-                round(high_15m * 0.98, 2),
-                round(high_15m, 2)
-            ]
-
-            result["current_price"] = round(price, 2)
-            result["target"] = round(low_15m, 2)
-
-            result["invalid_if_above"] = round(high_15m, 2)
-
-            result["message"] = "Price is bouncing up in downtrend. Look for sell near top."
-
-        else:
-
-            result["market_status"] = "UPTREND"
-            result["current_move"] = "PULLBACK DOWN"
-
-            result["what_to_do"] = "LOOK FOR BUY"
-
-            result["buy_zone"] = [
-                round(low_15m, 2),
-                round(low_15m * 1.02, 2)
-            ]
-
-            result["current_price"] = round(price, 2)
-            result["target"] = round(high_15m, 2)
-
-            result["invalid_if_below"] = round(low_15m, 2)
-
-            result["message"] = "Price dipping in uptrend. Look for buy near bottom."
-
-    # ==========================
-    # EXTRA INFO
-    # ==========================
-    result["trend_1h"] = trend_1h
-    result["trend_15m"] = trend_15m
-    result["time"] = datetime.datetime.now().strftime("%H:%M:%S")
-
-    return result
-
-# ==============================
-# API
-# ==============================
+# 🚀 API ROUTE
 @app.get("/analyze")
-def get_analysis():
+def analyze():
     return analyze_market()

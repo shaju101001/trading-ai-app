@@ -243,15 +243,22 @@ def build_decision(c15, c1h):
         plan = "Follow trend"
         entry = "Trade with trend"
 
-      # =========================
-    # TARGET LOGIC (FIXED)
-    # =========================
-    if "BUY" in entry:
+     # =========================
+# TARGET LOGIC (FINAL FIX)
+# =========================
+
+if "BUY" in entry:
+    target = int(high_level * 1.002)
+
+elif "SELL" in entry:
+    target = int(low_level * 0.998)
+
+else:
+    # fallback (based on bias)
+    if bias == "Bullish":
         target = int(high_level * 1.002)
-
-    elif "SELL" in entry:
+    elif bias == "Bearish":
         target = int(low_level * 0.998)
-
     else:
         target = 0
 

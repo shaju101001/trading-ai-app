@@ -9,17 +9,16 @@ app = FastAPI()
 # ==============================
 # FETCH DATA
 # ==============================
-def get_binance_data(interval="5m"):
+def get_data(interval):
     try:
         url = "https://api.binance.com/api/v3/klines"
         params = {"symbol": "BTCUSDT", "interval": interval, "limit": 100}
-        response = requests.get(url, params=params, timeout=10)
+        res = requests.get(url, params=params, timeout=10)
 
-        if response.status_code != 200:
+        if res.status_code != 200:
             return pd.DataFrame()
 
-        data = response.json()
-
+        data = res.json()
         if not isinstance(data, list):
             return pd.DataFrame()
 
@@ -41,7 +40,7 @@ def get_binance_data(interval="5m"):
 # ==============================
 def get_trend(df):
     try:
-        if df["close"].iloc[-2] > df["close"].iloc[-6]:
+        if df["close"].iloc[-2] > df["close"].iloc[-10]:
             return "UP"
         else:
             return "DOWN"
@@ -50,140 +49,120 @@ def get_trend(df):
 
 
 # ==============================
-# ANALYSIS
+# DAY RANGE POSITION
 # ==============================
-def analyze_market(df, trend):
+def get_day_position(df):
     try:
+        high = df["high"].max()
+        low = df["low"].min()
         price = df["close"].iloc[-2]
-        support = df["low"].rolling(20).min().iloc[-2]
-        resistance = df["high"].rolling(20).max().iloc[-2]
 
-        rr1, rr2, rr3 = 1, 2, 3
-        confidence = 30  # base confidence
-        reason = []
+        pos = (price - low) / (high - low)
 
-        # ==========================
-        # SIGNAL
-        # ==========================
-        if trend == "UP":
-            signal = "BUY"
-            sl = support
-            risk = max(price - sl, 1)
-
-            pullback_low = support
-            pullback_high = support + (risk * 0.3)
-
-            tp1 = price + (risk * rr1)
-            tp2 = price + (risk * rr2)
-            tp3 = price + (risk * rr3)
-
+        if pos > 0.7:
+            return "NEAR_HIGH"
+        elif pos < 0.3:
+            return "NEAR_LOW"
         else:
-            signal = "SELL"
-            sl = resistance + 10
-            risk = max(sl - price, 1)
-
-            pullback_low = resistance - (risk * 0.3)
-            pullback_high = resistance
-
-            tp1 = price - (risk * rr1)
-            tp2 = price - (risk * rr2)
-            tp3 = price - (risk * rr3)
-
-        # ==========================
-        # SMART ENTRY SYSTEM (FINAL)
-        # ==========================
-        entry_type = "PULLBACK"
-        entry_low = pullback_low
-        entry_high = pullback_high
-
-        # 🔥 1. CONTINUATION ENTRY (MOST IMPORTANT FIX)
-        if trend == "DOWN" and price < pullback_low:
-            entry_type = "CONTINUATION"
-            entry_low = price
-            entry_high = price
-            reason.append("Downtrend continuation")
-
-        elif trend == "UP" and price > pullback_high:
-            entry_type = "CONTINUATION"
-            entry_low = price
-            entry_high = price
-            reason.append("Uptrend continuation")
-
-        # 🔥 2. MARKET ENTRY (IF TOO FAR)
-        elif abs(price - pullback_high) > (risk * 1.5):
-            entry_type = "MARKET"
-            entry_low = price
-            entry_high = price
-            reason.append("Momentum entry")
-
-        # 🔥 3. PULLBACK ENTRY
-        else:
-            reason.append("Pullback entry")
-
-        # ==========================
-        # STATUS
-        # ==========================
-        if entry_low <= price <= entry_high:
-            status = "ENTER NOW"
-        elif trend == "DOWN" and price < entry_low:
-            status = "RUNNING"
-        elif trend == "UP" and price > entry_high:
-            status = "RUNNING"
-        else:
-            status = "WAIT"
-
-        # ==========================
-        # RR
-        # ==========================
-        if abs(entry_low - sl) > 0:
-            rr = abs(tp1 - entry_low) / abs(entry_low - sl)
-        else:
-            rr = 0
-
-        signal_time = datetime.datetime.now().strftime("%H:%M:%S")
-
-        return {
-            "signal": signal,
-            "entry_type": entry_type,
-            "entry_zone": [round(entry_low,2), round(entry_high,2)],
-            "sl": round(sl,2),
-            "tp1": round(tp1,2),
-            "tp2": round(tp2,2),
-            "tp3": round(tp3,2),
-            "rr": round(rr,2),
-            "confidence": confidence,
-            "trend": trend,
-            "status": status,
-            "signal_time": signal_time,
-            "reason": " | ".join(reason)
-        }
-
+            return "MIDDLE"
     except:
-        return {"signal": "ERROR", "reason": "Analysis failed"}
+        return "UNKNOWN"
 
 
 # ==============================
-# API ROUTE
+# MARKET CONDITION
 # ==============================
-@app.get("/analyze")
+def get_market_condition(df):
+    try:
+        high = df["high"].max()
+        low = df["low"].min()
+
+        if (high - low) < (df["close"].iloc[-1] * 0.003):
+            return "SIDEWAYS"
+        else:
+            return "TRENDING"
+    except:
+        return "UNKNOWN"
+
+
+# ==============================
+# MAIN ANALYSIS
+# ==============================
 def analyze():
-    df_5m = get_binance_data("5m")
-    df_15m = get_binance_data("15m")
+    df_1h = get_data("1h")
+    df_15m = get_data("15m")
 
-    if df_5m.empty or df_15m.empty:
-        return {"signal": "ERROR", "reason": "Data fetch failed"}
+    if df_1h.empty or df_15m.empty:
+        return {"status": "ERROR", "reason": "Data fetch failed"}
 
-    trend_5m = get_trend(df_5m)
+    trend_1h = get_trend(df_1h)
     trend_15m = get_trend(df_15m)
 
-    if trend_5m != trend_15m:
-        final_trend = trend_5m
-        alignment = "NOT_ALIGNED"
+    price = df_15m["close"].iloc[-2]
+
+    day_high = df_15m["high"].max()
+    day_low = df_15m["low"].min()
+
+    position = get_day_position(df_15m)
+    market = get_market_condition(df_15m)
+
+    # ==========================
+    # DECISION LOGIC
+    # ==========================
+    action = "WAIT"
+    target = price
+    sl = price
+    probability = 50
+    reason = []
+
+    if market == "SIDEWAYS":
+        return {
+            "action": "WAIT",
+            "market_condition": "SIDEWAYS",
+            "reason": "Low movement market"
+        }
+
+    # BUY LOGIC
+    if trend_1h == "UP" and trend_15m == "UP":
+        if position != "NEAR_HIGH":
+            action = "BUY NOW"
+            target = day_high
+            sl = day_low
+            probability = 65
+            reason.append("Uptrend + momentum")
+
+    # SELL LOGIC
+    elif trend_1h == "DOWN" and trend_15m == "DOWN":
+        if position != "NEAR_LOW":
+            action = "SELL NOW"
+            target = day_low
+            sl = day_high
+            probability = 65
+            reason.append("Downtrend + momentum")
+
     else:
-        final_trend = trend_5m
-        alignment = "ALIGNED"
+        action = "WAIT"
+        probability = 40
+        reason.append("Trend mismatch")
 
-    result = analyze_market(df_5m, final_trend)
-    result["alignment"] = alignment
+    return {
+        "action": action,
+        "current_price": round(price, 2),
+        "target": round(target, 2),
+        "sl": round(sl, 2),
+        "probability": probability,
+        "trend_1h": trend_1h,
+        "trend_15m": trend_15m,
+        "market_condition": market,
+        "day_position": position,
+        "reason": " | ".join(reason),
+        "time": datetime.datetime.now().strftime("%H:%M:%S")
+    }
 
-    return result
+
+# ==============================
+# API
+# ==============================
+@app.get("/analyze")
+def get_analysis():
+    return analyze()

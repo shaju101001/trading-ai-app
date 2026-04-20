@@ -38,17 +38,26 @@ async def get_binance_data(interval="15m", limit=150):
 # =========================
 # FETCH XAUUSD (YFINANCE)
 # =========================
-def get_xauusd_data(interval="15m"):
-    ticker = yf.Ticker("XAUUSD=X")
-    df = ticker.history(period="2d", interval=interval)
+async def get_xauusd_data(interval="15min"):
+    API_KEY = "31e678aa26d440aabf509abae13717fe"
+
+    url = f"https://api.twelvedata.com/time_series?symbol=XAU/USD&interval={interval}&outputsize=200&apikey={API_KEY}"
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(url)
+        data = r.json()
+
+    if "values" not in data:
+        raise Exception("XAUUSD fetch failed")
 
     candles = []
-    for i in range(len(df)):
+
+    for d in reversed(data["values"]):  # reverse to oldest → newest
         candles.append({
-            "open": float(df["Open"].iloc[i]),
-            "high": float(df["High"].iloc[i]),
-            "low": float(df["Low"].iloc[i]),
-            "close": float(df["Close"].iloc[i]),
+            "open": float(d["open"]),
+            "high": float(d["high"]),
+            "low": float(d["low"]),
+            "close": float(d["close"]),
         })
 
     return candles
@@ -264,8 +273,8 @@ async def analyze(symbol: str = Query("BTCUSDT")):
             c1h = await get_binance_data("1h")
 
         elif symbol == "XAUUSD":
-            c15 = get_xauusd_data("15m")
-            c1h = get_xauusd_data("1h")
+    c15 = await get_xauusd_data("15min")
+    c1h = await get_xauusd_data("1h")
 
         else:
             return {"error": "Unsupported symbol"}

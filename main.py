@@ -105,54 +105,65 @@ def get_levels(candles):
     return support, resistance
 
 # =========================
-# KEY ZONE DETECTION
+# KEY ZONE (WITH LEVELS)
 # =========================
 def get_key_zone(price, support, resistance, atr_val):
+    res_level = round(resistance / 100) * 100
+    sup_level = round(support / 100) * 100
+
+    zone_range = int(atr_val)
+
     if abs(price - resistance) <= atr_val:
-        return "Near resistance (sell zone)"
+        return f"Sell zone: {res_level - zone_range} - {res_level}"
+
     elif abs(price - support) <= atr_val:
-        return "Near support (buy zone)"
+        return f"Buy zone: {sup_level} - {sup_level + zone_range}"
+
     elif support < price < resistance:
-        return "Mid range (no man's zone)"
+        return f"Mid range: {sup_level} - {res_level}"
+
     elif price > resistance:
-        return "Breakout above resistance"
+        return f"Breakout above {res_level}"
+
     else:
-        return "Breakdown below support"
+        return f"Breakdown below {sup_level}"
 
 # =========================
 # MARKET EXPLANATION
 # =========================
 def explain_market(trend_1h, trend_15m, rsi_val, support, resistance, key_zone):
-    
+    res_level = round(resistance / 100) * 100
+    sup_level = round(support / 100) * 100
+
     if trend_1h == "DOWN" and trend_15m == "UP":
         phase = "Bearish Pullback"
-        dominance = "Sellers (overall)"
+        dominance = "Sellers"
         move = "Short-term bullish retracement"
-        next_move = "Rejection near resistance likely"
+        next_move = f"Rejection near {res_level}"
         trap = "Buyers may get trapped"
 
     elif trend_1h == "UP" and trend_15m == "DOWN":
         phase = "Bullish Pullback"
-        dominance = "Buyers (overall)"
+        dominance = "Buyers"
         move = "Short-term bearish retracement"
-        next_move = "Bounce from support likely"
+        next_move = f"Bounce from {sup_level}"
         trap = "Sellers may get trapped"
 
     elif trend_1h == "UP" and trend_15m == "UP":
         phase = "Strong Uptrend"
         dominance = "Buyers"
         move = "Trend continuation"
-        next_move = "Higher high likely"
+        next_move = f"Break above {res_level}"
         trap = "Late sellers risk"
 
     else:
         phase = "Strong Downtrend"
         dominance = "Sellers"
         move = "Trend continuation"
-        next_move = "Lower low likely"
+        next_move = f"Break below {sup_level}"
         trap = "Late buyers risk"
 
-    # Better RSI classification
+    # RSI classification
     if rsi_val > 65:
         momentum = "Strong bullish"
     elif rsi_val > 55:

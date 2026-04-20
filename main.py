@@ -65,7 +65,7 @@ def rsi(values, period=14):
     return 100 - (100/(1+rs))
 
 # =========================
-# FIB
+# FIBONACCI
 # =========================
 def get_fib(candles):
     high = max(c["high"] for c in candles[-50:])
@@ -80,29 +80,67 @@ def get_fib(candles):
     }
 
 # =========================
-# PRICE ACTION DETECTION
+# PRICE ACTION
 # =========================
 def detect_price_action(candles):
     last = candles[-1]
     prev = candles[-2]
 
-    # Bearish engulfing
     if prev["close"] > prev["open"] and last["close"] < last["open"] and last["open"] > prev["close"]:
         return "Bearish Engulfing"
 
-    # Bullish engulfing
     if prev["close"] < prev["open"] and last["close"] > last["open"] and last["open"] < prev["close"]:
         return "Bullish Engulfing"
 
-    # Rejection wick (upper)
     if last["high"] - max(last["open"], last["close"]) > (last["close"] - last["open"]) * 2:
         return "Upper Rejection Wick"
 
-    # Rejection wick (lower)
     if min(last["open"], last["close"]) - last["low"] > (last["close"] - last["open"]) * 2:
         return "Lower Rejection Wick"
 
     return "No strong pattern"
+
+# =========================
+# STRUCTURE
+# =========================
+def detect_structure(candles):
+    highs = [c["high"] for c in candles[-5:]]
+    lows = [c["low"] for c in candles[-5:]]
+
+    if highs[-1] < highs[-2] and highs[-2] > highs[-3]:
+        return "Lower High"
+
+    if lows[-1] > lows[-2] and lows[-2] < lows[-3]:
+        return "Higher Low"
+
+    return "No clear structure"
+
+# =========================
+# SMC (BOS + CHOCH)
+# =========================
+def detect_smc(candles):
+    highs = [c["high"] for c in candles[-10:]]
+    lows = [c["low"] for c in candles[-10:]]
+
+    last_high = highs[-1]
+    prev_high = highs[-2]
+
+    last_low = lows[-1]
+    prev_low = lows[-2]
+
+    if last_low < prev_low:
+        return "BOS Down"
+
+    if last_high > prev_high:
+        return "BOS Up"
+
+    if last_high > max(highs[:-1]):
+        return "CHoCH Up"
+
+    if last_low < min(lows[:-1]):
+        return "CHoCH Down"
+
+    return "No SMC signal"
 
 # =========================
 # DECISION ENGINE
@@ -121,6 +159,8 @@ def build_decision(c15, c1h):
 
     zone_low = int(fib["fib618"])
     zone_high = int(fib["fib50"])
+    high_level = int(fib["high"])
+    low_level = int(fib["low"])
 
     # Position
     if price < zone_low:
@@ -130,79 +170,70 @@ def build_decision(c15, c1h):
     else:
         position = "Above zone"
 
-    # Price action
     pattern = detect_price_action(c15)
+    structure = detect_structure(c15)
+    smc = detect_smc(c15)
 
+    # =========================
+    # LOGIC
+    # =========================
     scenario = ""
     plan = ""
     entry = ""
-
-    # =========================
-    # ADAPTIVE LOGIC
-    # =========================
 
     if trend1h == "DOWN" and trend15 == "UP":
         phase = "Bearish Pullback"
         bias = "Bearish"
 
         if position == "Inside zone":
+            scenario = f"Sell zone active {zone_low}-{zone_high}"
+            plan = f"Watch rejection at {zone_high}"
+
             if pattern in ["Bearish Engulfing", "Upper Rejection Wick"]:
-                scenario = "Confirmed rejection"
-                plan = "Sell confirmed"
-                entry = "Enter SELL"
+                entry = f"SELL near {zone_high}"
             else:
-                scenario = "Waiting confirmation"
-                plan = "Watch for rejection"
-                entry = "No trade"
+                entry = "Wait"
 
         elif position == "Above zone":
-            if price > fib["high"]:
-                scenario = "Confirmed breakout"
-                plan = "Trend shift possible"
-                entry = "Buy pullback"
+            scenario = f"Liquidity sweep {zone_high}-{high_level}"
+
+            if smc == "CHoCH Down" or structure == "Lower High":
+                plan = f"Reversal confirmed below {zone_high}"
+                entry = f"SELL after break below {zone_high}"
+            elif smc == "BOS Up":
+                plan = f"Breakout above {high_level}"
+                entry = f"BUY above {high_level}"
             else:
-                scenario = "Liquidity sweep"
-                plan = "Watch for rejection back into zone"
-                entry = "Sell if price drops below zone"
+                plan = f"Wait for structure below {zone_high}"
+                entry = "No trade"
 
         else:
-            scenario = "Approaching zone"
+            scenario = f"Approaching sell zone {zone_low}-{zone_high}"
             plan = "Wait"
             entry = "No trade"
-
-        target = int(fib["low"])
-        invalid = int(fib["high"])
 
     else:
         phase = "Trend Continuation"
         bias = "Bullish" if trend1h == "UP" else "Bearish"
         scenario = "Trending"
-        plan = "Trade with trend"
-        entry = "Follow trend"
-        target = int(fib["high"] if bias == "Bullish" else fib["low"])
-        invalid = int(fib["low"] if bias == "Bullish" else fib["high"])
-
-    # Momentum
-    if rsi_val > 65:
-        momentum = "Strong bullish"
-    elif rsi_val < 35:
-        momentum = "Strong bearish"
-    else:
-        momentum = "Neutral"
+        plan = "Follow trend"
+        entry = "Trade with trend"
 
     return {
         "price": round(price, 2),
         "phase": phase,
         "bias": bias,
-        "momentum": momentum,
-        "zone": f"{zone_low} - {zone_high}",
+        "zone": f"{zone_low}-{zone_high}",
+        "liquidity_zone": f"{zone_high}-{high_level}",
         "position": position,
         "pattern": pattern,
+        "structure": structure,
+        "smc_signal": smc,
         "scenario": scenario,
         "plan": plan,
         "entry": entry,
-        "target": target,
-        "invalidation": invalid,
+        "target": low_level,
+        "invalidation": high_level,
         "trend_1h": trend1h,
         "trend_15m": trend15
     }

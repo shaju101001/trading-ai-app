@@ -70,11 +70,11 @@ def ema(values, period):
     return e
 
 # =========================
-# FIB
+# FIB (ONLY FOR ZONE)
 # =========================
-def get_fib(candles):
-    high = max(c["high"] for c in candles[-50:])
-    low = min(c["low"] for c in candles[-50:])
+def get_fib(c):
+    high = max(x["high"] for x in c[-50:])
+    low = min(x["low"] for x in c[-50:])
     diff = high - low
 
     return {
@@ -83,6 +83,25 @@ def get_fib(candles):
         "fib50": int(high - 0.5 * diff),
         "fib618": int(high - 0.618 * diff)
     }
+
+# =========================
+# REAL LIQUIDITY (SWING HIGH)
+# =========================
+def get_liquidity_level(c):
+    highs = [x["high"] for x in c[-20:]]
+    return int(max(highs[:-1]))  # exclude last candle
+
+# =========================
+# SWEEP DETECTION
+# =========================
+def detect_sweep(c, liquidity_level):
+    prev = c[-2]
+    last = c[-1]
+
+    breakout = prev["high"] > liquidity_level
+    rejection = last["close"] < liquidity_level
+
+    return breakout and rejection
 
 # =========================
 # STRUCTURE
@@ -118,18 +137,6 @@ def detect_smc(c):
     return "No SMC"
 
 # =========================
-# REAL LIQUIDITY SWEEP
-# =========================
-def detect_sweep(c, zone_high):
-    prev = c[-2]
-    last = c[-1]
-
-    breakout = prev["high"] > zone_high
-    rejection = last["close"] < zone_high
-
-    return breakout and rejection
-
-# =========================
 # ENGINE
 # =========================
 def build_decision(c15, c1h):
@@ -148,6 +155,12 @@ def build_decision(c15, c1h):
     high_level = fib["high"]
     low_level = fib["low"]
 
+    liquidity_level = get_liquidity_level(c15)
+    sweep = detect_sweep(c15, liquidity_level)
+
+    structure = detect_structure(c15)
+    smc = detect_smc(c15)
+
     # POSITION
     if price < zone_low:
         position = "Below"
@@ -156,42 +169,24 @@ def build_decision(c15, c1h):
     else:
         position = "Above"
 
-    structure = detect_structure(c15)
-    smc = detect_smc(c15)
-    sweep = detect_sweep(c15, zone_high)
-
     # =========================
-    # LOGIC
+    # LOGIC (NO CONFUSION)
     # =========================
     if trend1h == "DOWN" and trend15 == "UP":
         phase = "Bearish Pullback"
         bias = "Bearish"
 
-        if position == "Above":
+        if sweep:
+            scenario = f"Sweep at {liquidity_level}"
+            entry = f"SELL below {zone_high}"
 
-            if sweep:
-                scenario = f"Sweep at {zone_high}"
-
-                if structure == "Lower High" or smc == "CHoCH Down":
-                    entry = f"SELL below {zone_high}"
-                else:
-                    entry = "Wait confirmation"
-
-            elif smc == "BOS Up":
-                scenario = "Breakout"
-                entry = f"BUY above {high_level}"
-
-            else:
-                scenario = "Weak breakout"
-                entry = "Wait"
-
-        elif position == "Inside":
-            scenario = "Sell zone"
-            entry = f"SELL near {zone_high}"
+        elif smc == "BOS Down" or structure == "Lower High":
+            scenario = "Bearish continuation"
+            entry = f"SELL below {zone_high}"
 
         else:
-            scenario = "Approaching"
-            entry = "Wait"
+            scenario = "No clear setup"
+            entry = "WAIT"
 
     else:
         phase = "Trend"
@@ -205,7 +200,7 @@ def build_decision(c15, c1h):
         scenario = "Trend continuation"
 
     # =========================
-    # TARGET FIX
+    # TARGET
     # =========================
     if "BUY" in entry:
         target = int(high_level * 1.002)
@@ -219,7 +214,7 @@ def build_decision(c15, c1h):
         "phase": phase,
         "bias": bias,
         "zone": f"{zone_low}-{zone_high}",
-        "liquidity_zone": f"{zone_high}-{high_level}",
+        "liquidity_level": liquidity_level,
         "position": position,
         "structure": structure,
         "smc": smc,

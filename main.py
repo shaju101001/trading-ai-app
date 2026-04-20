@@ -31,7 +31,6 @@ async def get_binance_data(interval="5m", limit=150):
         r.raise_for_status()
         data = r.json()
 
-    # Extract only needed fields (LIGHTWEIGHT)
     candles = []
     for d in data:
         candles.append({
@@ -114,6 +113,59 @@ def get_levels(candles):
     return support, resistance
 
 # =========================
+# MARKET EXPLANATION ENGINE
+# =========================
+
+def explain_market(trend_1h, trend_15m, rsi_val, price, support, resistance):
+    # Phase detection
+    if trend_1h == "DOWN" and trend_15m == "UP":
+        phase = "Bearish Pullback"
+        dominance = "Sellers (overall)"
+        current_move = "Short-term bullish retracement"
+        next_move = "High probability rejection near resistance"
+        trap = "Buyers may get trapped"
+
+    elif trend_1h == "UP" and trend_15m == "DOWN":
+        phase = "Bullish Pullback"
+        dominance = "Buyers (overall)"
+        current_move = "Short-term bearish retracement"
+        next_move = "High probability bounce from support"
+        trap = "Sellers may get trapped"
+
+    elif trend_1h == "UP" and trend_15m == "UP":
+        phase = "Strong Uptrend"
+        dominance = "Buyers"
+        current_move = "Trend continuation"
+        next_move = "Likely higher high"
+        trap = "Late sellers risk"
+
+    else:
+        phase = "Strong Downtrend"
+        dominance = "Sellers"
+        current_move = "Trend continuation"
+        next_move = "Likely lower low"
+        trap = "Late buyers risk"
+
+    # RSI context
+    if rsi_val > 60:
+        momentum = "Strong bullish momentum"
+    elif rsi_val < 40:
+        momentum = "Strong bearish momentum"
+    else:
+        momentum = "Neutral momentum"
+
+    return {
+        "market_phase": phase,
+        "dominance": dominance,
+        "current_move": current_move,
+        "momentum": momentum,
+        "next_probability": next_move,
+        "key_resistance": round(resistance, 2),
+        "key_support": round(support, 2),
+        "trap_warning": trap
+    }
+
+# =========================
 # AI SIGNAL ENGINE
 # =========================
 
@@ -182,6 +234,9 @@ def generate_signal(c15, c1h):
     if abs(price - support) > atr_val and abs(price - resistance) > atr_val:
         confidence += 30
 
+    # Market explanation
+    explanation = explain_market(trend_1h, trend_15, rsi_val, price, support, resistance)
+
     return {
         "action": action,
         "entry": round(entry, 2),
@@ -193,7 +248,8 @@ def generate_signal(c15, c1h):
         "rsi": round(rsi_val, 2),
         "support": round(support, 2),
         "resistance": round(resistance, 2),
-        "reason": reason
+        "reason": reason,
+        "market_explanation": explanation
     }
 
 # =========================

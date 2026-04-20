@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from datetime import datetime
 import pytz
-import yfinance as yf
 
 app = FastAPI()
 
@@ -18,14 +17,13 @@ app.add_middleware(
 BINANCE_URL = "https://api.binance.com/api/v3/klines"
 
 # =========================
-# FETCH BTC DATA (BINANCE)
+# FETCH BTC
 # =========================
 async def get_binance_data(interval="15m", limit=150):
     params = {"symbol": "BTCUSDT", "interval": interval, "limit": limit}
 
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.get(BINANCE_URL, params=params)
-        r.raise_for_status()
         data = r.json()
 
     return [{
@@ -36,7 +34,7 @@ async def get_binance_data(interval="15m", limit=150):
     } for d in data]
 
 # =========================
-# FETCH XAUUSD (YFINANCE)
+# FETCH XAU (TwelveData)
 # =========================
 async def get_xauusd_data(interval="15min"):
     API_KEY = "31e678aa26d440aabf509abae13717fe"
@@ -48,11 +46,10 @@ async def get_xauusd_data(interval="15min"):
         data = r.json()
 
     if "values" not in data:
-        raise Exception("XAUUSD fetch failed")
+        raise Exception("XAU fetch failed")
 
     candles = []
-
-    for d in reversed(data["values"]):  # reverse to oldest → newest
+    for d in reversed(data["values"]):
         candles.append({
             "open": float(d["open"]),
             "high": float(d["high"]),
@@ -67,33 +64,13 @@ async def get_xauusd_data(interval="15min"):
 # =========================
 def ema(values, period):
     k = 2 / (period + 1)
-    ema_val = values[0]
-    for price in values[1:]:
-        ema_val = price * k + ema_val * (1 - k)
-    return ema_val
+    e = values[0]
+    for v in values[1:]:
+        e = v * k + e * (1 - k)
+    return e
 
 # =========================
-# RSI
-# =========================
-def rsi(values, period=14):
-    gains, losses = [], []
-    for i in range(1, len(values)):
-        diff = values[i] - values[i-1]
-        gains.append(max(diff, 0))
-        losses.append(abs(min(diff, 0)))
-
-    avg_gain = sum(gains[:period]) / period
-    avg_loss = sum(losses[:period]) / period
-
-    for i in range(period, len(gains)):
-        avg_gain = (avg_gain*(period-1)+gains[i])/period
-        avg_loss = (avg_loss*(period-1)+losses[i])/period
-
-    rs = avg_gain / avg_loss if avg_loss != 0 else 0
-    return 100 - (100/(1+rs))
-
-# =========================
-# FIBONACCI
+# FIB
 # =========================
 def get_fib(candles):
     high = max(c["high"] for c in candles[-50:])
@@ -101,81 +78,63 @@ def get_fib(candles):
     diff = high - low
 
     return {
-        "high": high,
-        "low": low,
-        "fib50": high - 0.5 * diff,
-        "fib618": high - 0.618 * diff
+        "high": int(high),
+        "low": int(low),
+        "fib50": int(high - 0.5 * diff),
+        "fib618": int(high - 0.618 * diff)
     }
-
-# =========================
-# PRICE ACTION
-# =========================
-def detect_price_action(candles):
-    last = candles[-1]
-    prev = candles[-2]
-
-    if prev["close"] > prev["open"] and last["close"] < last["open"] and last["open"] > prev["close"]:
-        return "Bearish Engulfing"
-
-    if prev["close"] < prev["open"] and last["close"] > last["open"] and last["open"] < prev["close"]:
-        return "Bullish Engulfing"
-
-    if last["high"] - max(last["open"], last["close"]) > abs(last["close"] - last["open"]) * 2:
-        return "Upper Rejection Wick"
-
-    if min(last["open"], last["close"]) - last["low"] > abs(last["close"] - last["open"]) * 2:
-        return "Lower Rejection Wick"
-
-    return "No strong pattern"
 
 # =========================
 # STRUCTURE
 # =========================
-def detect_structure(candles):
-    highs = [c["high"] for c in candles[-5:]]
-    lows = [c["low"] for c in candles[-5:]]
+def detect_structure(c):
+    highs = [x["high"] for x in c[-5:]]
+    lows = [x["low"] for x in c[-5:]]
 
     if highs[-1] < highs[-2] and highs[-2] > highs[-3]:
         return "Lower High"
-
     if lows[-1] > lows[-2] and lows[-2] < lows[-3]:
         return "Higher Low"
 
-    return "No clear structure"
+    return "No structure"
 
 # =========================
-# SMC (BOS + CHOCH)
+# SMC
 # =========================
-def detect_smc(candles):
-    highs = [c["high"] for c in candles[-10:]]
-    lows = [c["low"] for c in candles[-10:]]
+def detect_smc(c):
+    highs = [x["high"] for x in c[-10:]]
+    lows = [x["low"] for x in c[-10:]]
 
-    last_high = highs[-1]
-    prev_high = highs[-2]
-
-    last_low = lows[-1]
-    prev_low = lows[-2]
-
-    if last_low < prev_low:
+    if lows[-1] < lows[-2]:
         return "BOS Down"
-
-    if last_high > prev_high:
+    if highs[-1] > highs[-2]:
         return "BOS Up"
 
-    if last_high > max(highs[:-1]):
+    if highs[-1] > max(highs[:-1]):
         return "CHoCH Up"
-
-    if last_low < min(lows[:-1]):
+    if lows[-1] < min(lows[:-1]):
         return "CHoCH Down"
 
-    return "No SMC signal"
+    return "No SMC"
 
 # =========================
-# DECISION ENGINE
+# REAL LIQUIDITY SWEEP
+# =========================
+def detect_sweep(c, zone_high):
+    prev = c[-2]
+    last = c[-1]
+
+    breakout = prev["high"] > zone_high
+    rejection = last["close"] < zone_high
+
+    return breakout and rejection
+
+# =========================
+# ENGINE
 # =========================
 def build_decision(c15, c1h):
-    closes15 = [c["close"] for c in c15]
-    closes1h = [c["close"] for c in c1h]
+    closes15 = [x["close"] for x in c15]
+    closes1h = [x["close"] for x in c1h]
 
     price = closes15[-1]
 
@@ -184,87 +143,77 @@ def build_decision(c15, c1h):
 
     fib = get_fib(c15)
 
-    zone_low = int(fib["fib618"])
-    zone_high = int(fib["fib50"])
-    high_level = int(fib["high"])
-    low_level = int(fib["low"])
+    zone_low = fib["fib618"]
+    zone_high = fib["fib50"]
+    high_level = fib["high"]
+    low_level = fib["low"]
 
-    # Position
+    # POSITION
     if price < zone_low:
-        position = "Below zone"
-    elif zone_low <= price <= zone_high:
-        position = "Inside zone"
+        position = "Below"
+    elif price <= zone_high:
+        position = "Inside"
     else:
-        position = "Above zone"
+        position = "Above"
 
-    pattern = detect_price_action(c15)
     structure = detect_structure(c15)
     smc = detect_smc(c15)
+    sweep = detect_sweep(c15, zone_high)
 
-    scenario = ""
-    plan = ""
-    entry = ""
-
+    # =========================
+    # LOGIC
+    # =========================
     if trend1h == "DOWN" and trend15 == "UP":
         phase = "Bearish Pullback"
         bias = "Bearish"
 
-        if position == "Inside zone":
-            scenario = f"Sell zone active {zone_low}-{zone_high}"
-            plan = f"Watch rejection at {zone_high}"
+        if position == "Above":
 
-            if pattern in ["Bearish Engulfing", "Upper Rejection Wick"]:
-                entry = f"SELL near {zone_high}"
+            if sweep:
+                scenario = f"Sweep at {zone_high}"
+
+                if structure == "Lower High" or smc == "CHoCH Down":
+                    entry = f"SELL below {zone_high}"
+                else:
+                    entry = "Wait confirmation"
+
+            elif smc == "BOS Up":
+                scenario = "Breakout"
+                entry = f"BUY above {high_level}"
+
             else:
+                scenario = "Weak breakout"
                 entry = "Wait"
 
-        elif position == "Above zone":
-            scenario = f"Liquidity sweep {zone_high}-{high_level}"
-
-            if smc == "CHoCH Down" or structure == "Lower High":
-                plan = f"Reversal below {zone_high}"
-                entry = f"SELL after break below {zone_high}"
-            elif smc == "BOS Up":
-                plan = f"Breakout above {high_level}"
-                entry = f"BUY above {high_level}"
-            else:
-                plan = f"Wait for structure below {zone_high}"
-                entry = "No trade"
+        elif position == "Inside":
+            scenario = "Sell zone"
+            entry = f"SELL near {zone_high}"
 
         else:
-            scenario = f"Approaching sell zone {zone_low}-{zone_high}"
-            plan = "Wait"
-            entry = "No trade"
+            scenario = "Approaching"
+            entry = "Wait"
 
     else:
-        phase = "Trend Continuation"
+        phase = "Trend"
         bias = "Bullish" if trend1h == "UP" else "Bearish"
-        scenario = "Trending"
-        plan = "Follow trend"
-        entry = "Trade with trend"
 
-     # =========================
-# TARGET LOGIC (FINAL FIX)
-# =========================
+        if bias == "Bullish":
+            entry = f"BUY above {zone_low}"
+        else:
+            entry = f"SELL below {zone_high}"
 
-if "BUY" in entry:
-    target = int(high_level * 1.002)
+        scenario = "Trend continuation"
 
-elif "SELL" in entry:
-    target = int(low_level * 0.998)
-
-else:
-    # fallback (based on bias)
-    if bias == "Bullish":
+    # =========================
+    # TARGET FIX
+    # =========================
+    if "BUY" in entry:
         target = int(high_level * 1.002)
-    elif bias == "Bearish":
+    elif "SELL" in entry:
         target = int(low_level * 0.998)
     else:
         target = 0
 
-    # =========================
-    # FINAL RETURN (CORRECT)
-    # =========================
     return {
         "price": round(price, 2),
         "phase": phase,
@@ -272,25 +221,20 @@ else:
         "zone": f"{zone_low}-{zone_high}",
         "liquidity_zone": f"{zone_high}-{high_level}",
         "position": position,
-        "pattern": pattern,
         "structure": structure,
-        "smc_signal": smc,
+        "smc": smc,
         "scenario": scenario,
-        "plan": plan,
         "entry": entry,
         "target": target,
-        "invalidation": high_level,
-        "trend_1h": trend1h,
-        "trend_15m": trend15
+        "invalidation": high_level
     }
 
 # =========================
-# API ROUTE
+# API
 # =========================
 @app.get("/analyze")
 async def analyze(symbol: str = Query("BTCUSDT")):
     try:
-
         if symbol == "BTCUSDT":
             c15 = await get_binance_data("15m")
             c1h = await get_binance_data("1h")
@@ -300,12 +244,11 @@ async def analyze(symbol: str = Query("BTCUSDT")):
             c1h = await get_xauusd_data("1h")
 
         else:
-            return {"error": "Unsupported symbol"}
+            return {"error": "Invalid symbol"}
 
         decision = build_decision(c15, c1h)
 
-        ist = pytz.timezone("Asia/Kolkata")
-        now = datetime.now(ist)
+        now = datetime.now(pytz.timezone("Asia/Kolkata"))
 
         return {
             "time": now.strftime("%d-%m-%Y %H:%M:%S IST"),

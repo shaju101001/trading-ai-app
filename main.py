@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from datetime import datetime
 import pytz
+import yfinance as yf
 
 app = FastAPI()
 
@@ -17,7 +18,7 @@ app.add_middleware(
 BINANCE_URL = "https://api.binance.com/api/v3/klines"
 
 # =========================
-# FETCH DATA
+# FETCH BTC DATA (BINANCE)
 # =========================
 async def get_binance_data(interval="15m", limit=150):
     params = {"symbol": "BTCUSDT", "interval": interval, "limit": limit}
@@ -33,6 +34,24 @@ async def get_binance_data(interval="15m", limit=150):
         "low": float(d[3]),
         "close": float(d[4]),
     } for d in data]
+
+# =========================
+# FETCH XAUUSD (YFINANCE)
+# =========================
+def get_xauusd_data(interval="15m"):
+    ticker = yf.Ticker("XAUUSD=X")
+    df = ticker.history(period="2d", interval=interval)
+
+    candles = []
+    for i in range(len(df)):
+        candles.append({
+            "open": float(df["Open"].iloc[i]),
+            "high": float(df["High"].iloc[i]),
+            "low": float(df["Low"].iloc[i]),
+            "close": float(df["Close"].iloc[i]),
+        })
+
+    return candles
 
 # =========================
 # EMA
@@ -92,10 +111,10 @@ def detect_price_action(candles):
     if prev["close"] < prev["open"] and last["close"] > last["open"] and last["open"] < prev["close"]:
         return "Bullish Engulfing"
 
-    if last["high"] - max(last["open"], last["close"]) > (last["close"] - last["open"]) * 2:
+    if last["high"] - max(last["open"], last["close"]) > abs(last["close"] - last["open"]) * 2:
         return "Upper Rejection Wick"
 
-    if min(last["open"], last["close"]) - last["low"] > (last["close"] - last["open"]) * 2:
+    if min(last["open"], last["close"]) - last["low"] > abs(last["close"] - last["open"]) * 2:
         return "Lower Rejection Wick"
 
     return "No strong pattern"
@@ -154,7 +173,6 @@ def build_decision(c15, c1h):
     trend15 = "UP" if ema(closes15, 20) > ema(closes15, 50) else "DOWN"
     trend1h = "UP" if ema(closes1h, 20) > ema(closes1h, 50) else "DOWN"
 
-    rsi_val = rsi(closes15)
     fib = get_fib(c15)
 
     zone_low = int(fib["fib618"])
@@ -174,9 +192,6 @@ def build_decision(c15, c1h):
     structure = detect_structure(c15)
     smc = detect_smc(c15)
 
-    # =========================
-    # LOGIC
-    # =========================
     scenario = ""
     plan = ""
     entry = ""
@@ -198,7 +213,7 @@ def build_decision(c15, c1h):
             scenario = f"Liquidity sweep {zone_high}-{high_level}"
 
             if smc == "CHoCH Down" or structure == "Lower High":
-                plan = f"Reversal confirmed below {zone_high}"
+                plan = f"Reversal below {zone_high}"
                 entry = f"SELL after break below {zone_high}"
             elif smc == "BOS Up":
                 plan = f"Breakout above {high_level}"
@@ -239,13 +254,21 @@ def build_decision(c15, c1h):
     }
 
 # =========================
-# API
+# API ROUTE
 # =========================
 @app.get("/analyze")
-async def analyze():
+async def analyze(symbol: str = Query("BTCUSDT")):
     try:
-        c15 = await get_binance_data("15m")
-        c1h = await get_binance_data("1h")
+        if symbol == "BTCUSDT":
+            c15 = await get_binance_data("15m")
+            c1h = await get_binance_data("1h")
+
+        elif symbol == "XAUUSD":
+            c15 = get_xauusd_data("15m")
+            c1h = get_xauusd_data("1h")
+
+        else:
+            return {"error": "Unsupported symbol"}
 
         decision = build_decision(c15, c1h)
 
@@ -254,7 +277,7 @@ async def analyze():
 
         return {
             "time": now.strftime("%d-%m-%Y %H:%M:%S IST"),
-            "market": "BTCUSDT",
+            "market": symbol,
             "decision": decision
         }
 

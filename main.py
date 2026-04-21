@@ -34,10 +34,10 @@ async def get_binance_data(interval="15m", limit=150):
     } for d in data]
 
 # =========================
-# FETCH XAU (TwelveData)
+# FETCH XAU
 # =========================
 async def get_xauusd_data(interval="15min"):
-    API_KEY = "31e678aa26d440aabf509abae13717fe"
+    API_KEY = "YOUR_API_KEY"
 
     url = f"https://api.twelvedata.com/time_series?symbol=XAU/USD&interval={interval}&outputsize=200&apikey={API_KEY}"
 
@@ -70,7 +70,7 @@ def ema(values, period):
     return e
 
 # =========================
-# FIB (ONLY FOR ZONE)
+# FIB
 # =========================
 def get_fib(c):
     high = max(x["high"] for x in c[-50:])
@@ -85,14 +85,14 @@ def get_fib(c):
     }
 
 # =========================
-# REAL LIQUIDITY (SWING HIGH)
+# LIQUIDITY
 # =========================
 def get_liquidity_level(c):
     highs = [x["high"] for x in c[-20:]]
-    return int(max(highs[:-1]))  # exclude last candle
+    return int(max(highs[:-1]))
 
 # =========================
-# SWEEP DETECTION
+# SWEEP
 # =========================
 def detect_sweep(c, liquidity_level):
     prev = c[-2]
@@ -115,7 +115,7 @@ def detect_structure(c):
     if lows[-1] > lows[-2] and lows[-2] < lows[-3]:
         return "Higher Low"
 
-    return "No structure"
+    return "None"
 
 # =========================
 # SMC
@@ -134,16 +134,48 @@ def detect_smc(c):
     if lows[-1] < min(lows[:-1]):
         return "CHoCH Down"
 
-    return "No SMC"
+    return "None"
+
+# =========================
+# PRESSURE (KEY FEATURE)
+# =========================
+def detect_pressure(c):
+    last = c[-1]
+    prev = c[-2]
+
+    body = abs(last["close"] - last["open"])
+    rng = last["high"] - last["low"]
+
+    momentum = last["close"] - c[-3]["close"]
+    strength = body / rng if rng != 0 else 0
+
+    if last["close"] > last["open"] and strength > 0.6 and momentum > 0:
+        return "Bullish Strong"
+
+    if last["close"] < last["open"] and strength > 0.6 and momentum < 0:
+        return "Bearish Strong"
+
+    if momentum > 0:
+        return "Bullish Weak"
+
+    if momentum < 0:
+        return "Bearish Weak"
+
+    return "Neutral"
 
 # =========================
 # ENGINE
 # =========================
-def build_decision(c15, c1h):
+def build_decision(data):
+    c1m = data["1m"]
+    c5m = data["5m"]
+    c15 = data["15m"]
+    c1h = data["1h"]
+
+    price = c15[-1]["close"]
+
     closes15 = [x["close"] for x in c15]
     closes1h = [x["close"] for x in c1h]
-
-    price = closes15[-1]
 
     trend15 = "UP" if ema(closes15, 20) > ema(closes15, 50) else "DOWN"
     trend1h = "UP" if ema(closes1h, 20) > ema(closes1h, 50) else "DOWN"
@@ -155,73 +187,65 @@ def build_decision(c15, c1h):
     high_level = fib["high"]
     low_level = fib["low"]
 
-    liquidity_level = get_liquidity_level(c15)
-    sweep = detect_sweep(c15, liquidity_level)
+    liquidity = get_liquidity_level(c15)
+    sweep = detect_sweep(c15, liquidity)
 
     structure = detect_structure(c15)
     smc = detect_smc(c15)
 
-    # POSITION
-    if price < zone_low:
-        position = "Below"
-    elif price <= zone_high:
-        position = "Inside"
-    else:
-        position = "Above"
+    # PRESSURE
+    p1m = detect_pressure(c1m)
+    p5m = detect_pressure(c5m)
+    p15m = detect_pressure(c15)
+    p1h = detect_pressure(c1h)
 
     # =========================
-    # LOGIC (NO CONFUSION)
+    # ENTRY LOGIC (SCALPER)
     # =========================
-    if trend1h == "DOWN" and trend15 == "UP":
-        phase = "Bearish Pullback"
-        bias = "Bearish"
+    entry = "WAIT"
+    scenario = "No setup"
 
-        if sweep:
-            scenario = f"Sweep at {liquidity_level}"
-            entry = f"SELL below {zone_high}"
+    if sweep and ("Bearish" in p1m or "Bearish" in p5m):
+        scenario = f"Sweep at {liquidity}"
+        entry = f"SELL below {zone_high}"
 
-        elif smc == "BOS Down" or structure == "Lower High":
-            scenario = "Bearish continuation"
-            entry = f"SELL below {zone_high}"
+    elif sweep and ("Bullish" in p1m or "Bullish" in p5m):
+        scenario = f"Sweep reversal up at {liquidity}"
+        entry = f"BUY above {zone_low}"
 
-        else:
-            scenario = "No clear setup"
-            entry = "WAIT"
+    elif smc == "BOS Down" and "Bearish" in p5m:
+        scenario = "Bearish continuation"
+        entry = f"SELL below {zone_high}"
 
-    else:
-        phase = "Trend"
-        bias = "Bullish" if trend1h == "UP" else "Bearish"
-
-        if bias == "Bullish":
-            entry = f"BUY above {zone_low}"
-        else:
-            entry = f"SELL below {zone_high}"
-
-        scenario = "Trend continuation"
+    elif smc == "BOS Up" and "Bullish" in p5m:
+        scenario = "Bullish continuation"
+        entry = f"BUY above {high_level}"
 
     # =========================
     # TARGET
     # =========================
     if "BUY" in entry:
-        target = int(high_level * 1.002)
+        target = int(price + (high_level - price) * 0.5)
     elif "SELL" in entry:
-        target = int(low_level * 0.998)
+        target = int(price - (price - low_level) * 0.5)
     else:
         target = 0
 
     return {
         "price": round(price, 2),
-        "phase": phase,
-        "bias": bias,
         "zone": f"{zone_low}-{zone_high}",
-        "liquidity_level": liquidity_level,
-        "position": position,
+        "liquidity": liquidity,
         "structure": structure,
         "smc": smc,
+        "pressure": {
+            "1m": p1m,
+            "5m": p5m,
+            "15m": p15m,
+            "1h": p1h
+        },
         "scenario": scenario,
         "entry": entry,
-        "target": target,
-        "invalidation": high_level
+        "target": target
     }
 
 # =========================
@@ -231,17 +255,25 @@ def build_decision(c15, c1h):
 async def analyze(symbol: str = Query("BTCUSDT")):
     try:
         if symbol == "BTCUSDT":
-            c15 = await get_binance_data("15m")
-            c1h = await get_binance_data("1h")
+            data = {
+                "1m": await get_binance_data("1m"),
+                "5m": await get_binance_data("5m"),
+                "15m": await get_binance_data("15m"),
+                "1h": await get_binance_data("1h"),
+            }
 
         elif symbol == "XAUUSD":
-            c15 = await get_xauusd_data("15min")
-            c1h = await get_xauusd_data("1h")
+            data = {
+                "1m": await get_xauusd_data("1min"),
+                "5m": await get_xauusd_data("5min"),
+                "15m": await get_xauusd_data("15min"),
+                "1h": await get_xauusd_data("1h"),
+            }
 
         else:
             return {"error": "Invalid symbol"}
 
-        decision = build_decision(c15, c1h)
+        decision = build_decision(data)
 
         now = datetime.now(pytz.timezone("Asia/Kolkata"))
 

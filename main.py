@@ -37,7 +37,7 @@ async def get_binance_data(interval="15m", limit=150):
 # FETCH XAU
 # =========================
 async def get_xauusd_data(interval="15min"):
-    API_KEY = "YOUR_API_KEY"
+    API_KEY = "31e678aa26d440aabf509abae13717fe"
 
     url = f"https://api.twelvedata.com/time_series?symbol=XAU/USD&interval={interval}&outputsize=200&apikey={API_KEY}"
 
